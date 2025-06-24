@@ -1,0 +1,23 @@
+# FastAPI and server dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# SSH and networking
+netmiko==4.3.0
+paramiko==3.3.1
+
+# Data handling and validation
+pydantic==2.5.0
+python-multipart==0.0.6
+
+# Environment and configuration
+python-dotenv==1.0.0
+
+# Development and testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# Optional: For better development experience
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4 

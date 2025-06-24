@@ -1,0 +1,14 @@
+# SSH Connection Settings
+SSH_HOST=192.168.1.100
+SSH_USERNAME=admin
+SSH_PASSWORD=your_password_here
+SSH_PORT=22
+SSH_TIMEOUT=30
+
+# API Settings
+HOST=0.0.0.0
+PORT=8000
+RELOAD=true
+
+# Logging
+LOG_LEVEL=INFO 
