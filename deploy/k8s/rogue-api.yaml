@@ -1,0 +1,145 @@
+# Kubernetes layout: one API Deployment and one worker Deployment per lane.
+#
+# NOT yet applied to a cluster. Treat it as the starting design: set the image,
+# point KAFKA_BOOTSTRAP_SERVERS at your brokers, and add the Kafka and CMS
+# credentials as Secrets before using it.
+#
+# Create the topics first (partition count = how many commands can run at once
+# per lane, so it is also the cap on parallel CMS work):
+#
+#   kafka-topics.sh --create --topic rogue.commands.provisioning --partitions 6  --replication-factor 3
+#   kafka-topics.sh --create --topic rogue.commands.automation   --partitions 2  --replication-factor 3
+#   kafka-topics.sh --create --topic rogue.commands.dlq          --partitions 1  --replication-factor 3
+#   kafka-topics.sh --create --topic rogue.job-updates           --partitions 6  --replication-factor 3 \
+#       --config retention.ms=604800000
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rogue-api-config
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  KAFKA_TOPIC_PREFIX: "rogue"
+  API_BASE_URL: "http://rogue-api:8000"
+  RELOAD: "false"
+  # There is no real CMS backend yet. With MOCK_MODE=true each pod simulates its
+  # own CMS, so ONTs created by a worker are not visible to reads on the API pods.
+  MOCK_MODE: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rogue-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: rogue-api}
+  template:
+    metadata:
+      labels: {app: rogue-api}
+    spec:
+      containers:
+        - name: api
+          image: REPLACE_WITH_YOUR_IMAGE
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: {name: rogue-api-config}
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rogue-api
+spec:
+  selector: {app: rogue-api}
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+# Provisioning workers. Stateless: scale replicas up to the partition count of
+# rogue.commands.provisioning. Extra replicas beyond that sit idle as spares.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rogue-worker-provisioning
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: rogue-worker, lane: provisioning}
+  strategy:
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 0}  # fewer rebalances during a rollout
+  template:
+    metadata:
+      labels: {app: rogue-worker, lane: provisioning}
+    spec:
+      # On SIGTERM a worker finishes the command in hand, commits, and leaves the
+      # group. This must be longer than the slowest command (activation waits up
+      # to 120s for the ONT). If it is killed anyway the command is redelivered.
+      terminationGracePeriodSeconds: 240
+      containers:
+        - name: worker
+          image: REPLACE_WITH_YOUR_IMAGE
+          command: ["python", "-m", "app.worker"]
+          envFrom:
+            - configMapRef: {name: rogue-api-config}
+          env:
+            - {name: WORKER_LANES, value: "provisioning"}
+            - {name: WORKER_HEARTBEAT_FILE, value: "/tmp/worker-heartbeat"}
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/worker-heartbeat') > 60)"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
+---
+# Automation workers run Ansible. Kept apart so a long playbook never holds up
+# ONT provisioning, and so they can be sized and scaled on their own.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rogue-worker-automation
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: rogue-worker, lane: automation}
+  strategy:
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 0}
+  template:
+    metadata:
+      labels: {app: rogue-worker, lane: automation}
+    spec:
+      terminationGracePeriodSeconds: 720  # longer than ANSIBLE_TIMEOUT_SECONDS (600)
+      containers:
+        - name: worker
+          image: REPLACE_WITH_YOUR_IMAGE
+          command: ["python", "-m", "app.worker"]
+          envFrom:
+            - configMapRef: {name: rogue-api-config}
+          env:
+            - {name: WORKER_LANES, value: "automation"}
+            - {name: ANSIBLE_MOCK, value: "false"}
+            - {name: WORKER_HEARTBEAT_FILE, value: "/tmp/worker-heartbeat"}
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/worker-heartbeat') > 60)"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 1Gi}

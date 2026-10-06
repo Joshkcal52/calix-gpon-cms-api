@@ -67,14 +67,25 @@ rogue-api/
 │   │   ├── ssh_controller.py    # SSH connection service (real or mock)
 │   │   ├── mock_e7.py           # Simulated E7-20 used by MOCK_MODE
 │   │   ├── ont_controller.py    # ONT data service
-│   │   └── hp_controller.py     # HP switch service
+│   │   ├── hp_controller.py     # HP switch service
+│   │   ├── provisioning_controller.py  # v2: ONT activation workflow
+│   │   ├── automation_controller.py    # v2: Ansible playbook runs
+│   │   └── job_controller.py    # v2: job status and event log
+│   ├── nbi/                      # v2: CMS gateway, circuit breaker, mock CMS
+│   ├── messaging/                # v2: command queue (in-memory or Kafka)
+│   ├── worker/                   # v2: background worker (python -m app.worker)
 │   └── utils/                    # Utility functions
 │       └── helpers.py           # Helper functions
+├── ansible/                     # Playbooks and inventory
+├── deploy/                      # Dockerfile, local Kafka, Kubernetes manifests
+├── docs/ARCHITECTURE.md         # v2 design
 ├── tests/                       # Pytest tests
 ├── main.py                      # FastAPI application entry point
 ├── config.py                    # Configuration settings
 ├── conftest.py                  # Pytest fixtures
 ├── requirements.txt             # Python dependencies
+├── requirements-kafka.txt       # Extra: Kafka queue
+├── requirements-ansible.txt     # Extra: real playbook runs
 ├── env_example.txt              # Environment variables template
 ├── README.md                    # This file
 ├── notes.md                     # Project notes
@@ -102,6 +113,27 @@ Supported commands: the ones the controllers send (`show version`, `show interfa
 
 The mock output is an approximation and has not been compared with a real E7-20. Capture real CLI output and update `mock_e7.py` before trusting a parser against live equipment.
 
+## 🧩 v2: CMS provisioning, jobs and Ansible
+
+The `/api/v2` routes provision ONTs through the Calix CMS northbound interface, queue changes for background workers, stream progress live, and run Ansible playbooks. The design, delivery rules and what is not yet verified are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+Try it with no hardware, CMS or Kafka:
+
+```bash
+MOCK_MODE=true python main.py
+
+# ONTs waiting to be provisioned on the simulated CMS
+curl http://localhost:8000/api/v2/networks/NTWK-MOCK-E7/onts/discovered
+
+# Activate one. Answers 202 with a job; follow events_url for live progress
+curl -X POST http://localhost:8000/api/v2/networks/NTWK-MOCK-E7/activations \
+  -H 'content-type: application/json' \
+  -d '{"serial_number": "CXNK00C4D301", "profile": "844G-1", "services": [{"vlan": 100, "bandwidth_profile": "RES-1G"}]}'
+curl -N http://localhost:8000/api/v2/jobs/<job id>/events
+```
+
+There is no real CMS backend yet: with `MOCK_MODE` off, the v2 CMS routes answer `503 cms_not_configured`.
+
 ## 📚 API Endpoints
 
 ### SSH Management (`/api/v1/ssh`)
@@ -121,6 +153,25 @@ The mock output is an approximation and has not been compared with a real E7-20.
 - `POST /analyze-rogue` - Analyze ONTs for rogue behavior
 - `GET /summary` - Get ONT summary statistics
 - `GET /search` - Search and filter ONTs
+
+### Provisioning (`/api/v2`)
+
+- `GET /nbi/health` - CMS backend and circuit breaker state
+- `GET /networks/{network}/onts/discovered` - ONTs not provisioned yet
+- `GET /networks/{network}/onts/{ont_id}` - State of one ONT
+- `POST /networks/{network}/onts/status-check` - Read up to 200 ONTs in parallel
+- `POST /networks/{network}/activations` - Activate an ONT (202, runs as a job)
+
+### Jobs (`/api/v2/jobs`)
+
+- `GET /` - Recent jobs
+- `GET /{job_id}` - Job status, result or error
+- `GET /{job_id}/events` - Live progress (Server-Sent Events)
+
+### Automation (`/api/v2/automation`)
+
+- `GET /playbooks` - Playbooks that can be run and their variables
+- `POST /playbooks/{name}/runs` - Run a playbook (202, runs as a job)
 
 ### System Endpoints
 

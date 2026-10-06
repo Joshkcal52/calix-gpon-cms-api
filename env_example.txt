@@ -16,3 +16,13 @@ RELOAD=true
 
 # Logging
 LOG_LEVEL=INFO 
+
+# --- v2 integration layer (see docs/ARCHITECTURE.md) ---
+# Leave empty to queue inside the API process. Set to use Kafka.
+# KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+# Run a worker inside the API process (default: yes without Kafka, no with it)
+# WORKER_EMBEDDED=true
+# Simulate playbook runs instead of starting Ansible (default: same as MOCK_MODE)
+# ANSIBLE_MOCK=false
+# Where playbooks reach this API
+# API_BASE_URL=http://127.0.0.1:8000

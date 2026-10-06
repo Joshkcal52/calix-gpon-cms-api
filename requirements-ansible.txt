@@ -1,0 +1,3 @@
+# Only needed where real playbooks run (ANSIBLE_MOCK=false). Not supported on Windows.
+ansible-runner==2.4.3
+ansible-core>=2.16,<2.18

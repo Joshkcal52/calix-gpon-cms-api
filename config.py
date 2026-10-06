@@ -3,7 +3,7 @@ Configuration settings for the Rogue ONT Detection API
 """
 
 import os
-from typing import Optional
+from typing import List, Optional
 from pydantic_settings import BaseSettings
 
 
@@ -33,12 +33,69 @@ class Settings(BaseSettings):
     # For development without lab hardware. Set MOCK_MODE=true in .env
     mock_mode: bool = False
 
+    # --- CMS northbound interface (the fast lane) ---
+    nbi_timeout_seconds: float = 10.0  # per CMS call
+    nbi_max_retries: int = 2  # extra attempts for reads; writes are retried by the worker
+    nbi_max_concurrency: int = 8  # CMS calls in flight per process
+    nbi_breaker_failure_threshold: int = 5  # consecutive failures that pause CMS calls
+    nbi_breaker_recovery_seconds: float = 30.0  # how long calls stay paused
+
+    # ONT activation
+    activation_verify_timeout_seconds: float = 120.0  # wait for the ONT to come online
+    activation_poll_seconds: float = 2.0
+
+    # --- Queue ---
+    # Leave empty to queue inside the API process (single process, nothing
+    # survives a restart). Set to use Kafka, e.g. KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    kafka_bootstrap_servers: Optional[str] = None
+    kafka_topic_prefix: str = "rogue"
+    # Must be longer than the slowest command, or Kafka takes the partition away mid-task
+    kafka_max_poll_interval_seconds: float = 900.0
+    command_max_age_seconds: float = 3600.0  # older queued commands are failed, not run
+
+    # --- Workers ---
+    # Run a worker inside the API process. Default: yes without Kafka, no with it
+    # (with Kafka, workers run as their own pods: python -m app.worker).
+    worker_embedded: Optional[bool] = None
+    worker_lanes: str = "provisioning,automation"
+    worker_heartbeat_file: Optional[str] = None  # touched every 10s for a liveness probe
+
+    # --- Ansible (the heavy lane) ---
+    # Simulate playbook runs instead of starting Ansible. Default: same as MOCK_MODE.
+    ansible_mock: Optional[bool] = None
+    ansible_timeout_seconds: float = 600.0
+    # Where playbooks reach this API. They never talk to CMS directly.
+    api_base_url: str = "http://127.0.0.1:8000"
+
     # Target Platform Settings
     target_platform: str = "Calix E7-20 (GPON)"
     cms_version: str = "15.01.772"
 
     # Logging
     log_level: str = "INFO"
+
+    def run_embedded_worker(self) -> bool:
+        if self.worker_embedded is not None:
+            return self.worker_embedded
+        return not self.kafka_bootstrap_servers
+
+    def worker_lane_list(self) -> List[str]:
+        lanes = [lane.strip() for lane in self.worker_lanes.split(",") if lane.strip()]
+        unknown = set(lanes) - {"provisioning", "automation"}
+        if unknown or not lanes:
+            raise ValueError(f"WORKER_LANES must list provisioning and/or automation, got '{self.worker_lanes}'")
+        return lanes
+
+    def check_worker_timeouts(self, lanes: List[str]) -> None:
+        """Refuse to start a worker whose slowest command could outlast Kafka's patience"""
+        slowest = self.activation_verify_timeout_seconds + 6 * self.nbi_timeout_seconds
+        if "automation" in lanes:
+            slowest = max(slowest, self.ansible_timeout_seconds)
+        if self.kafka_bootstrap_servers and slowest + 60 > self.kafka_max_poll_interval_seconds:
+            raise ValueError(
+                f"KAFKA_MAX_POLL_INTERVAL_SECONDS ({self.kafka_max_poll_interval_seconds:g}) must be at least "
+                f"60 seconds longer than the slowest command ({slowest:g} seconds). Otherwise Kafka reassigns "
+                f"the partition mid-task and the command runs twice.")
 
     class Config:
         # Load settings from .env file if it exists
