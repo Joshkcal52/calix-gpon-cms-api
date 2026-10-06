@@ -195,7 +195,10 @@ class Worker:
             if error.get("retryable") and not expired:
                 delay = min(self.max_retry_backoff, self.retry_backoff * 2 ** (delivery.attempt - 1))
                 delay = max(delay, float(error.get("retry_after_seconds") or 0))
-                await context._publish("warning", f"{error['message']} Retrying in {delay:.0f} seconds.",
+                # The breaker's message already says when to try again
+                wait = ("This job will retry by itself." if error.get("retry_after_seconds")
+                        else f"Retrying in {delay:.0f} seconds.")
+                await context._publish("warning", f"{error['message']} {wait}",
                                        {"attempt": delivery.attempt, "error": error})
                 await consumer.retry(delivery)  # NOT acknowledged
                 await self._pause(delay)

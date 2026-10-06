@@ -1,0 +1,7 @@
+# Everything the full test suite can use. Tests that need a missing package are skipped.
+-r requirements.txt
+-r requirements-kafka.txt
+-r requirements-ansible.txt
+-r requirements-cms.txt
+# Only for its built-in Kafka mock cluster (tests/support/mock_kafka.py)
+confluent-kafka==2.15.1

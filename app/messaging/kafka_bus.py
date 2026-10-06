@@ -6,6 +6,8 @@ is set.
 Topics (prefix from KAFKA_TOPIC_PREFIX, default "rogue"):
   rogue.commands.provisioning   ONT commands, keyed by network name
   rogue.commands.automation     playbook runs
+  legacy-gpon-events            signup and cutover events (LEGACY_EVENTS_TOPIC),
+                                as plain event JSON, keyed by network name
   rogue.commands.dlq            commands that failed for good, with the reason
   rogue.job-updates             progress updates, keyed by job id
 
@@ -21,12 +23,14 @@ Delivery rules:
   - Commands with the same key share a partition and run in order, one at a
     time. The number of partitions is therefore the cap on parallel CMS work.
 
-NOTE: this module has unit tests against a stubbed aiokafka, but it has not
-been run against a real broker yet. See docs/ARCHITECTURE.md.
+Tested against a stubbed client (tests/test_kafka_bus.py) and over the real
+Kafka wire protocol against librdkafka's mock cluster
+(tests/test_kafka_protocol.py). Not yet run against an Apache Kafka broker.
 """
 
+import json
 import logging
-from typing import Any, AsyncIterator, Dict, Optional, Sequence, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, Optional, Sequence, Tuple
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
 from aiokafka.errors import CommitFailedError, KafkaError
@@ -46,10 +50,25 @@ class KafkaBus:
         self._max_poll_interval_ms = int(settings.kafka_max_poll_interval_seconds * 1000)
         self.updates_topic = f"{self._prefix}.job-updates"
         self.dlq_topic = f"{self._prefix}.commands.dlq"
+        self._session_timeout_ms = int(getattr(settings, "kafka_session_timeout_seconds", 30) * 1000)
         self._producer: Optional[AIOKafkaProducer] = None
+        self._lane_topics: Dict[str, str] = {}
+        self._encoders: Dict[str, Callable[[Command], bytes]] = {}
+        self._decoders: Dict[str, Callable[[bytes], Command]] = {}  # by topic
+
+    def register_lane(self, lane: str, topic: str, *, encode: Callable[[Command], bytes],
+                      decode: Callable[[bytes], Command]) -> None:
+        """Give a lane its own topic name and message format"""
+        self._lane_topics[lane] = topic
+        self._encoders[lane] = encode
+        self._decoders[topic] = decode
 
     def command_topic(self, lane: str) -> str:
-        return f"{self._prefix}.commands.{lane}"
+        return self._lane_topics.get(lane, f"{self._prefix}.commands.{lane}")
+
+    def decode_command(self, topic: str, raw: bytes) -> Command:
+        decode = self._decoders.get(topic)
+        return decode(raw) if decode else Command.model_validate_json(raw)
 
     async def start(self) -> None:
         self._producer = AIOKafkaProducer(
@@ -66,8 +85,12 @@ class KafkaBus:
             self._producer = None
 
     async def publish_command(self, command: Command) -> None:
-        await self._send(self.command_topic(command.lane), command.model_dump_json().encode(),
-                         key=command.key, wait=True)
+        encode = self._encoders.get(command.lane)
+        value = encode(command) if encode else command.model_dump_json().encode()
+        await self._send(self.command_topic(command.lane), value, key=command.key, wait=True)
+
+    async def publish_event(self, topic: str, key: str, value: Dict[str, Any]) -> None:
+        await self._send(topic, json.dumps(value).encode(), key=key, wait=True)
 
     async def publish_update(self, update: JobUpdate) -> None:
         # Status changes wait for the broker; chatter in between does not
@@ -129,7 +152,7 @@ class KafkaCommandConsumer:
             enable_auto_commit=False,  # offsets are committed by ack() only
             auto_offset_reset="earliest",
             max_poll_interval_ms=self._bus._max_poll_interval_ms,
-            session_timeout_ms=30000,
+            session_timeout_ms=self._bus._session_timeout_ms,
         )
         await self._consumer.start()
         logger.info(f"Kafka consumer started in group {self.group_id}")
@@ -145,7 +168,7 @@ class KafkaCommandConsumer:
             for record in records:
                 handle = (record.topic, record.partition, record.offset)
                 try:
-                    command = Command.model_validate_json(record.value)
+                    command = self._bus.decode_command(record.topic, record.value)
                 except ValueError as e:
                     # Unreadable forever: park it and move on, or it blocks the partition
                     logger.error(f"Unreadable command at {handle}: {e}")

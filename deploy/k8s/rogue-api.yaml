@@ -7,6 +7,7 @@
 # Create the topics first (partition count = how many commands can run at once
 # per lane, so it is also the cap on parallel CMS work):
 #
+#   kafka-topics.sh --create --topic legacy-gpon-events          --partitions 6  --replication-factor 3
 #   kafka-topics.sh --create --topic rogue.commands.provisioning --partitions 6  --replication-factor 3
 #   kafka-topics.sh --create --topic rogue.commands.automation   --partitions 2  --replication-factor 3
 #   kafka-topics.sh --create --topic rogue.commands.dlq          --partitions 1  --replication-factor 3
@@ -21,9 +22,14 @@ data:
   KAFKA_TOPIC_PREFIX: "rogue"
   API_BASE_URL: "http://rogue-api:8000"
   RELOAD: "false"
-  # There is no real CMS backend yet. With MOCK_MODE=true each pod simulates its
-  # own CMS, so ONTs created by a worker are not visible to reads on the API pods.
-  MOCK_MODE: "true"
+  MOCK_MODE: "false"
+  # The CMS server, reached over plain HTTP by cms-nbi-client. The login comes
+  # from the cms-nbi-credentials Secret (keys: username, password).
+  CMS_HOST: "cms.example.internal"
+  CMS_PORT: "18080"
+  # Signup and cutover events in; migration requests out to the XGS side.
+  LEGACY_EVENTS_TOPIC: "legacy-gpon-events"
+  XGS_MIGRATION_TOPIC: "xgs-migration-requests"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -44,6 +50,11 @@ spec:
             - containerPort: 8000
           envFrom:
             - configMapRef: {name: rogue-api-config}
+          env:
+            - name: CMS_USERNAME
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: username}}
+            - name: CMS_PASSWORD
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: password}}
           readinessProbe:
             httpGet: {path: /health, port: 8000}
             periodSeconds: 10
@@ -92,7 +103,55 @@ spec:
             - configMapRef: {name: rogue-api-config}
           env:
             - {name: WORKER_LANES, value: "provisioning"}
+            - name: CMS_USERNAME
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: username}}
+            - name: CMS_PASSWORD
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: password}}
             - {name: WORKER_HEARTBEAT_FILE, value: "/tmp/worker-heartbeat"}
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/worker-heartbeat') > 60)"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
+---
+# Legacy GPON workers: signups and GPON-to-XGS cutovers from legacy-gpon-events.
+# Stateless. Scale replicas up to that topic's partition count.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rogue-worker-legacy
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: rogue-worker, lane: legacy}
+  strategy:
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 0}
+  template:
+    metadata:
+      labels: {app: rogue-worker, lane: legacy}
+    spec:
+      terminationGracePeriodSeconds: 240
+      containers:
+        - name: worker
+          image: REPLACE_WITH_YOUR_IMAGE
+          command: ["python", "-m", "app.worker"]
+          envFrom:
+            - configMapRef: {name: rogue-api-config}
+          env:
+            - {name: WORKER_LANES, value: "legacy"}
+            - name: CMS_USERNAME
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: username}}
+            - name: CMS_PASSWORD
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: password}}
+            - {name: WORKER_HEARTBEAT_FILE, value: "/tmp/worker-heartbeat"}
+            # Mount your own profile map here and point at it:
+            # - {name: LEGACY_PROFILE_MAP_PATH, value: "/config/profile_map.yml"}
           livenessProbe:
             exec:
               command:
@@ -130,6 +189,10 @@ spec:
             - configMapRef: {name: rogue-api-config}
           env:
             - {name: WORKER_LANES, value: "automation"}
+            - name: CMS_USERNAME
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: username}}
+            - name: CMS_PASSWORD
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: password}}
             - {name: ANSIBLE_MOCK, value: "false"}
             - {name: WORKER_HEARTBEAT_FILE, value: "/tmp/worker-heartbeat"}
           livenessProbe:

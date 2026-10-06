@@ -1,6 +1,10 @@
-# Rogue ONT Detection API
+# GPON Provisioning API for Calix CMS
 
-A FastAPI application for detecting rogue ONTs on Calix E7-20 GPON systems.
+A REST and Kafka front end for legacy Calix GPON: what the SMx API is for XGS, this is for CMS. A billing system such as Sonar calls it (or publishes an event) when a customer signs up, and the configuration is pushed to the legacy ONT through the CMS northbound interface, with no screen-scraping.
+
+It also hands legacy subscribers over to the XGS side and includes an emergency rollback playbook. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and [deploy/demo/README.md](deploy/demo/README.md) for a demo that needs no hardware.
+
+The repository is named `rogue-api` after its first feature, rogue ONT detection over SSH. That lives on in `/api/v1` and is described further down.
 
 ## 🚀 Quick Start
 
@@ -71,13 +75,14 @@ rogue-api/
 │   │   ├── provisioning_controller.py  # v2: ONT activation workflow
 │   │   ├── automation_controller.py    # v2: Ansible playbook runs
 │   │   └── job_controller.py    # v2: job status and event log
-│   ├── nbi/                      # v2: CMS gateway, circuit breaker, mock CMS
+│   ├── nbi/                      # v2: CMS gateway, cms-nbi-client backend, mock CMS and mock NBI server
+│   ├── legacy/                   # v2: signup and cutover events, legacy-to-XGS translation, snapshots
 │   ├── messaging/                # v2: command queue (in-memory or Kafka)
 │   ├── worker/                   # v2: background worker (python -m app.worker)
 │   └── utils/                    # Utility functions
 │       └── helpers.py           # Helper functions
-├── ansible/                     # Playbooks and inventory
-├── deploy/                      # Dockerfile, local Kafka, Kubernetes manifests
+├── ansible/                     # Playbooks and inventory; rollback/ is the emergency rollback
+├── deploy/                      # Dockerfile, demo (Compose), local Kafka, Kubernetes manifests
 ├── docs/ARCHITECTURE.md         # v2 design
 ├── tests/                       # Pytest tests
 ├── main.py                      # FastAPI application entry point
@@ -86,6 +91,8 @@ rogue-api/
 ├── requirements.txt             # Python dependencies
 ├── requirements-kafka.txt       # Extra: Kafka queue
 ├── requirements-ansible.txt     # Extra: real playbook runs
+├── requirements-cms.txt         # Extra: real CMS via cms-nbi-client
+├── requirements-test.txt        # Everything the full test suite uses
 ├── env_example.txt              # Environment variables template
 ├── README.md                    # This file
 ├── notes.md                     # Project notes
@@ -115,7 +122,7 @@ The mock output is an approximation and has not been compared with a real E7-20.
 
 ## 🧩 v2: CMS provisioning, jobs and Ansible
 
-The `/api/v2` routes provision ONTs through the Calix CMS northbound interface, queue changes for background workers, stream progress live, and run Ansible playbooks. The design, delivery rules and what is not yet verified are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The `/api/v2` routes provision ONTs through the Calix CMS northbound interface, queue changes for background workers, stream progress live, hand subscribers over to XGS, and run Ansible playbooks. The design, delivery rules and what is not yet verified are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Try it with no hardware, CMS or Kafka:
 
@@ -132,7 +139,9 @@ curl -X POST http://localhost:8000/api/v2/networks/NTWK-MOCK-E7/activations \
 curl -N http://localhost:8000/api/v2/jobs/<job id>/events
 ```
 
-There is no real CMS backend yet: with `MOCK_MODE` off, the v2 CMS routes answer `503 cms_not_configured`.
+For a real CMS, set `CMS_HOST`, `CMS_USERNAME` and `CMS_PASSWORD` and install `requirements-cms.txt`. This has only been run against the mock CMS server in this repository, never a real CMS.
+
+Emergency rollback of an OLT from a Git snapshot: [ansible/rollback/README.md](ansible/rollback/README.md).
 
 ## 📚 API Endpoints
 
@@ -161,6 +170,11 @@ There is no real CMS backend yet: with `MOCK_MODE` off, the v2 CMS routes answer
 - `GET /networks/{network}/onts/{ont_id}` - State of one ONT
 - `POST /networks/{network}/onts/status-check` - Read up to 200 ONTs in parallel
 - `POST /networks/{network}/activations` - Activate an ONT (202, runs as a job)
+
+### Legacy GPON subscribers (`/api/v2/networks/{network}`)
+
+- `POST /signups` - New subscriber: provision their ONT and services on CMS (202, runs as a job)
+- `POST /cutovers` - Hand a subscriber over to XGS: read CMS, publish a migration request (202, runs as a job)
 
 ### Jobs (`/api/v2/jobs`)
 

@@ -1,0 +1,21 @@
+<soapenv:Envelope xmlns:soapenv="http://www.w3.org/2003/05/soap-envelope">
+  <soapenv:Body>
+    <rpc message-id="{{ 2147483647 | random }}" nodename="{{ cms_network | e }}" username="{{ cms_username | e }}" sessionid="{{ cms_session | e }}">
+      <get-config>
+        <source><running/></source>
+        <filter type="subtree">
+          <top>
+            <object>
+              <type>Ont</type>
+              <id><ont>{{ snapshot_ont.ont_id }}</ont></id>
+              <children>
+                <type>EthSvc</type>
+                <attr-list>admin descr tag-action bw-prof out-tag in-tag</attr-list>
+              </children>
+            </object>
+          </top>
+        </filter>
+      </get-config>
+    </rpc>
+  </soapenv:Body>
+</soapenv:Envelope>

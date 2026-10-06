@@ -8,13 +8,16 @@ from typing import Any, Dict
 
 from app.controller.automation_controller import PlaybookRunner, run_playbook
 from app.controller.provisioning_controller import activate_ont
+from app.legacy.handlers import build_legacy_handlers
+from app.messaging.bus import MessageBus
 from app.models.job_model import ACTION_ACTIVATE_ONT, ACTION_RUN_PLAYBOOK
 from app.models.provisioning_model import ActivationRequest
 from app.nbi.gateway import NbiGateway
 from app.worker.runner import Handler, JobContext
 
 
-def build_handlers(settings: Any, gateway: NbiGateway, playbook_runner: PlaybookRunner) -> Dict[str, Handler]:
+def build_handlers(settings: Any, gateway: NbiGateway, playbook_runner: PlaybookRunner,
+                   bus: MessageBus) -> Dict[str, Handler]:
 
     async def handle_activate_ont(context: JobContext, payload: Dict[str, Any]) -> Dict[str, Any]:
         request = ActivationRequest.model_validate(payload["request"])
@@ -29,4 +32,5 @@ def build_handlers(settings: Any, gateway: NbiGateway, playbook_runner: Playbook
     return {
         ACTION_ACTIVATE_ONT: handle_activate_ont,
         ACTION_RUN_PLAYBOOK: handle_run_playbook,
+        **build_legacy_handlers(settings, gateway, bus),
     }

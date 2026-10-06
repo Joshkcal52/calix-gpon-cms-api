@@ -1,0 +1,3 @@
+# Only needed when CMS_HOST is set (a real CMS, or the mock NBI server).
+# 0.1.0 is the newest release that installs. It is licensed GPL-3.0.
+cms-nbi-client==0.1.0

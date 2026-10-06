@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Body>
+    <auth message-id="2">
+      <logout>
+        <UserName>{{ cms_username | e }}</UserName>
+        <SessionId>{{ cms_session | e }}</SessionId>
+      </logout>
+    </auth>
+  </soapenv:Body>
+</soapenv:Envelope>

@@ -1,0 +1,22 @@
+<soapenv:Envelope xmlns:soapenv="http://www.w3.org/2003/05/soap-envelope">
+  <soapenv:Body>
+    <rpc message-id="{{ 2147483647 | random }}" nodename="{{ cms_network | e }}" username="{{ cms_username | e }}" sessionid="{{ cms_session | e }}">
+      <edit-config>
+        <target><running/></target>
+        <config>
+          <top>
+            <object operation="delete" force="true">
+              <type>EthSvc</type>
+              <id>
+                <ont>{{ snapshot_ont.ont_id }}</ont>
+                <ontslot>{{ ont_slot }}</ontslot>
+                <ontethany>{{ item.service.ont_port }}</ontethany>
+                <ethsvc>{{ item.service.service_index }}</ethsvc>
+              </id>
+            </object>
+          </top>
+        </config>
+      </edit-config>
+    </rpc>
+  </soapenv:Body>
+</soapenv:Envelope>

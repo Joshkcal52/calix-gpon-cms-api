@@ -1,0 +1,23 @@
+# How legacy CMS identifiers translate to the XGS/SMx side during a cutover.
+# Point LEGACY_PROFILE_MAP_PATH at your own copy of this file.
+#
+# These entries match the simulated CMS. Replace them with your own: on a real
+# CMS the keys are the numeric profile and tag action IDs.
+#
+# A cutover fails, and changes nothing, if a subscriber uses a profile or tag
+# action that is not listed here.
+
+# Legacy bandwidth profile -> service profile on the XGS side
+bandwidth_profiles:
+  "RES-1G":
+    service_profile: "XGS-RESI-1G"
+    service_type: data
+  "VOICE":
+    service_profile: "XGS-VOICE"
+    service_type: voice
+
+# Legacy tag action -> VLAN. Only used for services that have no VLAN of their
+# own on CMS (out-tag "none"), where the tag action decides the VLAN.
+tag_action_vlans:
+  "1": 100
+  "2": 200

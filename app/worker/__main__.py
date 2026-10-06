@@ -6,7 +6,7 @@ hand and leaves the consumer group. This is what the Kubernetes worker pods
 run. Environment:
 
   KAFKA_BOOTSTRAP_SERVERS   required
-  WORKER_LANES              comma-separated: provisioning, automation
+  WORKER_LANES              comma-separated: provisioning, automation, legacy
 """
 
 import asyncio
@@ -33,7 +33,7 @@ async def main() -> None:
     bus = build_bus(settings)
     gateway = build_gateway(settings)
     worker = Worker(
-        bus, lanes, build_handlers(settings, gateway, build_playbook_runner(settings)),
+        bus, lanes, build_handlers(settings, gateway, build_playbook_runner(settings), bus),
         max_command_age=settings.command_max_age_seconds,
         heartbeat_file=settings.worker_heartbeat_file)
 

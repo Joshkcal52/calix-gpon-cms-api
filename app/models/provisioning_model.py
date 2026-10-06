@@ -17,6 +17,7 @@ NetworkName = Annotated[str, Field(pattern=NETWORK_PATTERN, description="CMS net
 SerialNumber = Annotated[str, Field(pattern=r"^[A-Za-z0-9]{4,16}$", description="ONT serial number")]
 ProfileName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")]
 OntId = Annotated[int, Field(ge=1, description="ONT ID on the network")]
+SubscriberId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{1,32}$", description="Billing subscriber ID")]
 
 
 class OperState(str, Enum):
@@ -25,13 +26,27 @@ class OperState(str, Enum):
 
 
 class EthernetService(BaseModel):
-    """A VLAN bound to an ONT Ethernet port"""
+    """A service to bind to an ONT Ethernet port"""
     model_config = ConfigDict(extra="forbid")
 
-    vlan: int = Field(..., ge=1, le=4094, description="Service VLAN")
+    vlan: int = Field(..., ge=1, le=4094, description="Service VLAN (sent to CMS as the outer tag)")
     ont_port: int = Field(1, ge=1, le=8, description="ONT Ethernet port number")
-    bandwidth_profile: ProfileName = Field(..., description="Bandwidth profile name")
+    bandwidth_profile: ProfileName = Field(..., description="Bandwidth profile (a numeric ID on a real CMS)")
+    tag_action: Optional[ProfileName] = Field(
+        None, description="Service tag action (a numeric ID on a real CMS, which requires one)")
     description: Optional[str] = Field(None, max_length=64)
+
+
+class ProvisionedService(BaseModel):
+    """A service as CMS reports it on an ONT"""
+    service_index: int = Field(1, description="Service number on the ONT port")
+    ont_port: int = 1
+    vlan: Optional[int] = Field(None, description="Outer tag. Empty when the tag action sets the VLAN")
+    inner_vlan: Optional[int] = None
+    bandwidth_profile: Optional[str] = None
+    tag_action: Optional[str] = None
+    admin_state: str = "enabled"
+    description: Optional[str] = None
 
 
 class DiscoveredOnt(BaseModel):
@@ -52,7 +67,7 @@ class OntState(BaseModel):
     pon_port: Optional[str] = None
     description: Optional[str] = None
     subscriber_id: Optional[str] = None
-    services: List[EthernetService] = []
+    services: List[ProvisionedService] = []
 
 
 class OntSpec(BaseModel):
@@ -61,7 +76,7 @@ class OntSpec(BaseModel):
     ont_id: Optional[OntId] = Field(None, description="Leave empty to take the next free ID")
     profile: ProfileName = Field(..., description="ONT profile name")
     description: Optional[str] = Field(None, max_length=64)
-    subscriber_id: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_.-]{1,32}$")
+    subscriber_id: Optional[SubscriberId] = None
 
 
 class ActivationRequest(OntSpec):
@@ -71,6 +86,10 @@ class ActivationRequest(OntSpec):
     services: List[EthernetService] = Field(default_factory=list, max_length=8)
     rollback_on_failure: bool = Field(
         True, description="Delete the ONT again if a service cannot be bound")
+    require_discovery: bool = Field(
+        True, description="Fail if the ONT has not been seen on a PON. Set false to pre-provision "
+                          "by serial number before the ONT is installed")
+    wait_for_online: bool = Field(True, description="Wait for the ONT to come online before finishing")
 
 
 class StatusCheckRequest(BaseModel):

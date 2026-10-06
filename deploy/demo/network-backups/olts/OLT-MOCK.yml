@@ -1,0 +1,261 @@
+format: 1
+olt: OLT-MOCK
+network: NTWK-MOCK-E7
+captured_at: '2026-10-06T22:42:54+00:00'
+onts:
+- ont_id: 1
+  serial_number: CXNK00A3F101
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1001
+  description: 101 Alder St
+  pon_port: 1/1/1
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 2
+  serial_number: CXNK00A3F102
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1002
+  description: 105 Alder St
+  pon_port: 1/1/1
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 3
+  serial_number: CXNK00A3F103
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1003
+  description: 112 Alder St
+  pon_port: 1/1/1
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+  - ont_port: 2
+    service_index: 1
+    vlan: 200
+    inner_vlan: null
+    bandwidth_profile: VOICE
+    tag_action: '2'
+    admin_state: enabled
+    description: null
+- ont_id: 4
+  serial_number: CXNK00A3F104
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1004
+  description: 118 Alder St
+  pon_port: 1/1/1
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 5
+  serial_number: CXNK00A3F105
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1005
+  description: 124 Alder St
+  pon_port: 1/1/1
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 6
+  serial_number: CXNK00A3F106
+  profile: 812G-1
+  admin_state: enabled
+  subscriber_id: SUB-1006
+  description: 131 Alder St
+  pon_port: 1/1/1
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+  - ont_port: 2
+    service_index: 1
+    vlan: 200
+    inner_vlan: null
+    bandwidth_profile: VOICE
+    tag_action: '2'
+    admin_state: enabled
+    description: null
+- ont_id: 7
+  serial_number: CXNK00A3F107
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1007
+  description: 137 Alder St
+  pon_port: 1/1/1
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 8
+  serial_number: CXNK00A3F108
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1008
+  description: 140 Alder St
+  pon_port: 1/1/1
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 9
+  serial_number: CXNK00B7C209
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1009
+  description: 12 Birch Ave
+  pon_port: 1/1/2
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+  - ont_port: 2
+    service_index: 1
+    vlan: 200
+    inner_vlan: null
+    bandwidth_profile: VOICE
+    tag_action: '2'
+    admin_state: enabled
+    description: null
+- ont_id: 10
+  serial_number: CXNK00B7C210
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1010
+  description: 18 Birch Ave
+  pon_port: 1/1/2
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 11
+  serial_number: CXNK00B7C211
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1011
+  description: 25 Birch Ave
+  pon_port: 1/1/2
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 12
+  serial_number: CXNK00B7C212
+  profile: 812G-1
+  admin_state: enabled
+  subscriber_id: SUB-1012
+  description: 31 Birch Ave
+  pon_port: 1/1/2
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+  - ont_port: 2
+    service_index: 1
+    vlan: 200
+    inner_vlan: null
+    bandwidth_profile: VOICE
+    tag_action: '2'
+    admin_state: enabled
+    description: null
+- ont_id: 13
+  serial_number: CXNK00B7C213
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1013
+  description: 40 Birch Ave
+  pon_port: 1/1/2
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 14
+  serial_number: CXNK00B7C214
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1014
+  description: 46 Birch Ave
+  pon_port: 1/1/2
+  services:
+  - ont_port: 1
+    service_index: 1
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null

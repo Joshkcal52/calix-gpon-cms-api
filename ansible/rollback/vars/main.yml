@@ -1,0 +1,31 @@
+---
+# Settings for rollback.yml. Override any of these with -e on the command line.
+
+# The CMS northbound interface. Use https and port 18443 if your CMS has it enabled.
+cms_nbi_url: "{{ lookup('ansible.builtin.env', 'CMS_NBI_URL') | default('http://cms.example.internal:18080/cmsexc/ex/netconf', true) }}"
+
+# CMS login. Taken from the environment so it never sits in a file or in shell history.
+cms_username: "{{ lookup('ansible.builtin.env', 'CMS_NBI_USER') }}"
+cms_password: "{{ lookup('ansible.builtin.env', 'CMS_NBI_PASSWORD') }}"
+
+# Where snapshots live. One file per OLT: <snapshot_dir>/<target_olt>.yml
+backup_repo: "{{ lookup('ansible.builtin.env', 'NETWORK_BACKUPS_REPO') | default('git@git.example.internal:netops/network-backups.git', true) }}"
+snapshot_dir: olts
+
+# Branch, tag or commit to restore from. The default is the newest snapshot.
+# If the newest snapshot was taken after the damage, name an older commit:
+#   -e snapshot_version=3f2a9c1
+snapshot_version: main
+
+# Also remove services that are on a restored ONT now but are not in the snapshot.
+# ONTs that are not in the snapshot at all are never touched.
+remove_extra_services: true
+
+# Seconds to wait for each CMS request
+cms_timeout: 30
+
+# ONT slot that holds the Ethernet ports (3 on the ONTs cms-nbi-client was written for)
+ont_slot: 3
+
+# Optional: write a JSON record of the run to this file
+# report_path: ./rollback-OLT-04.json

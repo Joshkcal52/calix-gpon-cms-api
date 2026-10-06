@@ -20,6 +20,7 @@ acknowledgement), so handlers must be safe to run again.
 """
 
 import asyncio
+import json
 import logging
 from collections import deque
 from typing import Any, AsyncIterator, Deque, Dict, List, Optional, Protocol, Sequence, Tuple
@@ -82,6 +83,12 @@ class MessageBus(Protocol):
 
     async def publish_update(self, update: JobUpdate) -> None: ...
 
+    async def publish_event(self, topic: str, key: str, value: Dict[str, Any]) -> None:
+        """
+        Publish a JSON message to a topic outside this app's own (for example the
+        XGS/SMx topic). Returns only once it is safely stored.
+        """
+
     def updates(self) -> AsyncIterator[JobUpdate]:
         """Every update, including ones published before this call where the bus keeps history"""
 
@@ -98,6 +105,7 @@ class InMemoryBus:
         self._arrived = asyncio.Event()
         self._subscribers: List[asyncio.Queue] = []
         self.dead_letters: List[Tuple[Command, Dict[str, Any]]] = []
+        self.events: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}  # topic -> [(key, value)]
 
     async def start(self) -> None:
         return None
@@ -115,6 +123,9 @@ class InMemoryBus:
         copy = JobUpdate.model_validate_json(update.model_dump_json())
         for queue in self._subscribers:
             queue.put_nowait(copy)
+
+    async def publish_event(self, topic: str, key: str, value: Dict[str, Any]) -> None:
+        self.events.setdefault(topic, []).append((key, json.loads(json.dumps(value))))
 
     def updates(self) -> AsyncIterator[JobUpdate]:
         # Subscribe now, not on first read, so nothing published in between is missed
@@ -180,6 +191,11 @@ class _InMemoryConsumer:
 def build_bus(settings: Any) -> MessageBus:
     """Kafka when KAFKA_BOOTSTRAP_SERVERS is set, otherwise in-process queues"""
     if settings.kafka_bootstrap_servers:
+        from app.legacy import events as legacy_events
         from app.messaging.kafka_bus import KafkaBus
-        return KafkaBus(settings)
+        bus = KafkaBus(settings)
+        # The legacy topic has its own name and carries plain event JSON
+        bus.register_lane(legacy_events.LANE_LEGACY, settings.legacy_events_topic,
+                          encode=legacy_events.encode, decode=legacy_events.decode)
+        return bus
     return InMemoryBus()

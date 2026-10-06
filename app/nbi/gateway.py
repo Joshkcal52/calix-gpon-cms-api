@@ -37,6 +37,10 @@ class NbiBackend(Protocol):
 
     async def find_ont_by_serial(self, network: str, serial_number: str) -> Optional[OntState]: ...
 
+    async def find_onts_by_subscriber(self, network: str, subscriber_id: str) -> List[OntState]: ...
+
+    async def list_onts(self, network: str) -> List[OntState]: ...
+
     async def create_ont(self, network: str, spec: OntSpec) -> OntState: ...
 
     async def add_ethernet_service(self, network: str, ont_id: int, service: EthernetService) -> None: ...
@@ -71,6 +75,16 @@ class NbiGateway:
         return await self._call("find_ont_by_serial",
                                 lambda: self.backend.find_ont_by_serial(network, serial_number),
                                 idempotent=True)
+
+    async def find_onts_by_subscriber(self, network: str, subscriber_id: str) -> List[OntState]:
+        """ONTs provisioned for a subscriber. Use get_ont() on a match for its services."""
+        return await self._call("find_onts_by_subscriber",
+                                lambda: self.backend.find_onts_by_subscriber(network, subscriber_id),
+                                idempotent=True)
+
+    async def list_onts(self, network: str) -> List[OntState]:
+        """Every provisioned ONT on a network, without services. Slow on a large network."""
+        return await self._call("list_onts", lambda: self.backend.list_onts(network), idempotent=True)
 
     async def create_ont(self, network: str, spec: OntSpec) -> OntState:
         return await self._call("create_ont",
@@ -140,8 +154,8 @@ class NotConfiguredBackend:
 
     def _refuse(self) -> NbiNotConfiguredError:
         return NbiNotConfiguredError(
-            "No CMS connection is configured. Set MOCK_MODE=true to use the simulated CMS; "
-            "a real CMS backend has not been added yet (see docs/ARCHITECTURE.md).")
+            "No CMS connection is configured. Set CMS_HOST (with CMS_USERNAME and CMS_PASSWORD) "
+            "to reach a CMS, or MOCK_MODE=true to use the simulated one.")
 
     async def list_discovered_onts(self, network: str) -> List[DiscoveredOnt]:
         raise self._refuse()
@@ -150,6 +164,12 @@ class NotConfiguredBackend:
         raise self._refuse()
 
     async def find_ont_by_serial(self, network: str, serial_number: str) -> Optional[OntState]:
+        raise self._refuse()
+
+    async def find_onts_by_subscriber(self, network: str, subscriber_id: str) -> List[OntState]:
+        raise self._refuse()
+
+    async def list_onts(self, network: str) -> List[OntState]:
         raise self._refuse()
 
     async def create_ont(self, network: str, spec: OntSpec) -> OntState:
@@ -171,6 +191,13 @@ def build_gateway(settings: Any) -> NbiGateway:
         from app.nbi.mock_cms import MockCmsBackend
         backend: NbiBackend = MockCmsBackend()
         logger.warning("MOCK_MODE is on: CMS calls go to a simulated CMS, not a real one")
+    elif settings.cms_host:
+        from app.nbi.cms_client_backend import CmsNbiClientBackend
+        backend = CmsNbiClientBackend(
+            host=settings.cms_host, port=settings.cms_port,
+            username=settings.cms_username, password=settings.cms_password or "",
+            timeout=settings.nbi_timeout_seconds)
+        logger.info(f"CMS backend: cms-nbi-client -> http://{settings.cms_host}:{settings.cms_port}")
     else:
         backend = NotConfiguredBackend()
 

@@ -1,0 +1,15 @@
+<soapenv:Envelope xmlns:soapenv="http://www.w3.org/2003/05/soap-envelope">
+  <soapenv:Body>
+    <rpc message-id="{{ 2147483647 | random }}" nodename="{{ cms_network | e }}" username="{{ cms_username | e }}" sessionid="{{ cms_session | e }}">
+      <action>
+        <action-type>show-ont</action-type>
+        <action-args>
+          <ont>
+            <type>Ont</type>
+            <id><ont>{{ snapshot_ont.ont_id }}</ont></id>
+          </ont>
+        </action-args>
+      </action>
+    </rpc>
+  </soapenv:Body>
+</soapenv:Envelope>

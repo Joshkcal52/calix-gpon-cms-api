@@ -3,6 +3,7 @@ Configuration settings for the Rogue ONT Detection API
 """
 
 import os
+from pathlib import Path
 from typing import List, Optional
 from pydantic_settings import BaseSettings
 
@@ -34,6 +35,11 @@ class Settings(BaseSettings):
     mock_mode: bool = False
 
     # --- CMS northbound interface (the fast lane) ---
+    # The real CMS, reached with cms-nbi-client over plain HTTP. Ignored when MOCK_MODE is on.
+    cms_host: Optional[str] = None
+    cms_port: int = 18080
+    cms_username: str = "nbi"
+    cms_password: Optional[str] = None
     nbi_timeout_seconds: float = 10.0  # per CMS call
     nbi_max_retries: int = 2  # extra attempts for reads; writes are retried by the worker
     nbi_max_concurrency: int = 8  # CMS calls in flight per process
@@ -51,13 +57,21 @@ class Settings(BaseSettings):
     kafka_topic_prefix: str = "rogue"
     # Must be longer than the slowest command, or Kafka takes the partition away mid-task
     kafka_max_poll_interval_seconds: float = 900.0
+    kafka_session_timeout_seconds: float = 30.0  # how long before a dead worker's work is reassigned
     command_max_age_seconds: float = 3600.0  # older queued commands are failed, not run
+
+    # --- Legacy GPON layer (signup and GPON-to-XGS cutover) ---
+    legacy_events_topic: str = "legacy-gpon-events"  # consumed: signup and cutover events
+    # Produced: migration requests for the XGS side. Set this to your existing
+    # XGS/SMx topic only once XgsMigrationRequest matches that topic's schema.
+    xgs_migration_topic: str = "xgs-migration-requests"
+    legacy_profile_map_path: str = str(Path(__file__).resolve().parent / "app" / "legacy" / "profile_map.yml")
 
     # --- Workers ---
     # Run a worker inside the API process. Default: yes without Kafka, no with it
     # (with Kafka, workers run as their own pods: python -m app.worker).
     worker_embedded: Optional[bool] = None
-    worker_lanes: str = "provisioning,automation"
+    worker_lanes: str = "provisioning,automation,legacy"
     worker_heartbeat_file: Optional[str] = None  # touched every 10s for a liveness probe
 
     # --- Ansible (the heavy lane) ---
@@ -81,9 +95,10 @@ class Settings(BaseSettings):
 
     def worker_lane_list(self) -> List[str]:
         lanes = [lane.strip() for lane in self.worker_lanes.split(",") if lane.strip()]
-        unknown = set(lanes) - {"provisioning", "automation"}
+        unknown = set(lanes) - {"provisioning", "automation", "legacy"}
         if unknown or not lanes:
-            raise ValueError(f"WORKER_LANES must list provisioning and/or automation, got '{self.worker_lanes}'")
+            raise ValueError(f"WORKER_LANES must list provisioning, automation and/or legacy, "
+                             f"got '{self.worker_lanes}'")
         return lanes
 
     def check_worker_timeouts(self, lanes: List[str]) -> None:

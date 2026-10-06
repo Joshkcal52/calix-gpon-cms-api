@@ -1,0 +1,109 @@
+# Demo of the legacy GPON layer on one machine. Nothing here touches real
+# hardware: CMS is the mock NBI server and "the XGS side" is a listener that
+# prints what it receives. See deploy/demo/README.md for the walkthrough.
+#
+#   docker compose -f deploy/demo/docker-compose.yml up --build
+#
+# NOT YET RUN: this file was written without access to Docker. The same four
+# processes were run and tested directly (see README.md, "Without Docker").
+name: gpon-legacy-demo
+
+x-app: &app
+  build:
+    context: ../..
+    dockerfile: deploy/Dockerfile
+  restart: on-failure
+
+x-app-env: &app-env
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  MOCK_MODE: "false"
+  # The "real" CMS for this demo is the mock NBI server, reached with cms-nbi-client
+  CMS_HOST: mock-cms
+  CMS_PORT: "18080"
+  CMS_USERNAME: nbi-demo
+  CMS_PASSWORD: demo-password
+  API_BASE_URL: http://api:8000
+  RELOAD: "false"
+
+services:
+  kafka:
+    image: apache/kafka:3.7.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "29092:29092"  # for Kafka tools on your own machine
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  # Stands in for the Calix CMS server: SOAP on port 18080, as CMS has it
+  mock-cms:
+    <<: *app
+    command: ["uvicorn", "app.nbi.mock_cms_server:app", "--host", "0.0.0.0", "--port", "18080"]
+    environment:
+      MOCK_CMS_USER: nbi-demo
+      MOCK_CMS_PASSWORD: demo-password
+    ports:
+      - "18080:18080"
+
+  # The REST API. Validates requests and writes events to Kafka. Runs no jobs itself.
+  api:
+    <<: *app
+    environment:
+      <<: *app-env
+      WORKER_EMBEDDED: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      kafka: {condition: service_healthy}
+      mock-cms: {condition: service_started}
+
+  # The stateless worker. Add more with: docker compose ... up --scale worker=3
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *app-env
+      WORKER_LANES: legacy,provisioning,automation
+      ANSIBLE_MOCK: "false"
+    depends_on:
+      kafka: {condition: service_healthy}
+      mock-cms: {condition: service_started}
+
+  # Stands in for the XGS/SMx side: prints each migration request it receives
+  xgs-listener:
+    <<: *app
+    command: ["python", "deploy/demo/xgs_listener.py"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      kafka: {condition: service_healthy}
+
+  # The emergency rollback playbook. Not started by "up"; run it on demand:
+  #   docker compose -f deploy/demo/docker-compose.yml run --rm rollback -e target_olt=OLT-MOCK --check
+  rollback:
+    <<: *app
+    profiles: ["tools"]
+    restart: "no"
+    entrypoint: ["/app/deploy/demo/rollback.sh"]
+    environment:
+      CMS_NBI_URL: http://mock-cms:18080/cmsexc/ex/netconf
+      CMS_NBI_USER: nbi-demo
+      CMS_NBI_PASSWORD: demo-password
+      ANSIBLE_FORCE_COLOR: "true"
+    depends_on:
+      mock-cms: {condition: service_started}

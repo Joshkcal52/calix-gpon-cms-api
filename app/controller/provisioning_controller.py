@@ -47,7 +47,8 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     """
     Activate a discovered ONT. Each step is reported as a job event.
 
-    1. Find the ONT: already provisioned, or discovered on a PON
+    1. Find the ONT: already provisioned, or discovered on a PON (with
+       require_discovery=false an ONT can be provisioned before it is installed)
     2. Create the ONT (skipped if it already exists)
     3. Bind each Ethernet service (VLAN) that is not bound yet
     4. Wait for the ONT to come online
@@ -81,12 +82,16 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     else:
         discovered = await gateway.list_discovered_onts(network)
         match = next((d for d in discovered if d.serial_number == serial), None)
-        if match is None:
+        if match is not None:
+            await context.emit("log", f"Found {match.model} on GPON port {match.pon_port}",
+                               model=match.model, pon_port=match.pon_port)
+        elif request.require_discovery:
             raise NbiNotFoundError(
                 f"ONT {serial} has not been discovered on {network}. "
                 f"Check that it is connected and powered.")
-        await context.emit("log", f"Found {match.model} on GPON port {match.pon_port}",
-                           model=match.model, pon_port=match.pon_port)
+        else:
+            await context.emit("log", f"ONT {serial} has not been seen on a PON yet; provisioning it "
+                                      f"ahead of installation")
 
         await context.step(2, total_steps, f"Creating ONT {serial}")
         spec = OntSpec(**request.model_dump(include=set(OntSpec.model_fields)))
@@ -112,8 +117,11 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
             await _roll_back(context, gateway, network, ont_id)
         raise
 
-    await context.step(4, total_steps, f"Waiting for ONT {ont_id} to come online")
-    deadline = time.monotonic() + verify_timeout
+    if request.wait_for_online:
+        await context.step(4, total_steps, f"Waiting for ONT {ont_id} to come online")
+    else:
+        await context.step(4, total_steps, f"Checking ONT {ont_id}")
+    deadline = time.monotonic() + (verify_timeout if request.wait_for_online else 0)
     while True:
         ont = await gateway.get_ont(network, ont_id)
         if ont.oper_state == OperState.ONLINE or time.monotonic() >= deadline:
@@ -121,7 +129,7 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
         await asyncio.sleep(poll_seconds)
 
     online = ont.oper_state == OperState.ONLINE
-    if not online:
+    if not online and request.wait_for_online:
         await context.emit("warning",
                            f"ONT {ont_id} is provisioned but did not come online within "
                            f"{verify_timeout:g} seconds. It has been left in place.", ont_id=ont_id)

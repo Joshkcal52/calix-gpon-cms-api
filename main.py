@@ -14,7 +14,7 @@ import logging
 
 # Import routes
 from app.routes import ssh_routes, ont_routes, hp_routes
-from app.routes import provisioning_routes, job_routes, automation_routes
+from app.routes import provisioning_routes, job_routes, automation_routes, legacy_routes
 
 # Import services for the v2 integration layer
 from app.controller.automation_controller import build_playbook_runner
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
         lanes = settings.worker_lane_list()
         settings.check_worker_timeouts(lanes)
         worker = Worker(
-            bus, lanes, build_handlers(settings, gateway, build_playbook_runner(settings)),
+            bus, lanes, build_handlers(settings, gateway, build_playbook_runner(settings), bus),
             max_command_age=settings.command_max_age_seconds)
         app.state.worker = worker
         worker_task = asyncio.create_task(worker.run(), name="embedded-worker")
@@ -100,6 +100,7 @@ app.include_router(ssh_routes.router)
 app.include_router(ont_routes.router)
 app.include_router(hp_routes.router)
 app.include_router(provisioning_routes.router)
+app.include_router(legacy_routes.router)
 app.include_router(job_routes.router)
 app.include_router(automation_routes.router)
 
