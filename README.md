@@ -30,6 +30,8 @@ cp env_example.txt .env
 
 Edit `.env` with your actual SSH credentials and settings.
 
+No hardware? Set `MOCK_MODE=true` in `.env` and skip the credentials. See [Mock Mode](#-mock-mode-no-hardware-needed).
+
 ### 4. Run the Application
 
 ```bash
@@ -54,22 +56,24 @@ rogue-api/
 ├── app/                          # Main application package
 │   ├── __init__.py
 │   ├── models/                   # Pydantic data models
-│   │   ├── __init__.py
-│   │   ├── ont.py               # ONT data models
-│   │   └── ssh.py               # SSH connection models
+│   │   ├── ont_model.py         # ONT data models
+│   │   ├── ssh_model.py         # SSH connection models
+│   │   └── hp_model.py          # HP switch interface models
 │   ├── routes/                   # API route handlers
-│   │   ├── __init__.py
-│   │   ├── ssh.py               # SSH management endpoints
-│   │   └── ont.py               # ONT management endpoints
-│   ├── services/                 # Business logic services
-│   │   ├── __init__.py
-│   │   ├── ssh_service.py       # SSH connection service
-│   │   └── ont_service.py       # ONT data service
+│   │   ├── ssh_routes.py        # SSH management endpoints
+│   │   ├── ont_routes.py        # ONT management endpoints
+│   │   └── hp_routes.py         # HP switch endpoints
+│   ├── controller/               # Business logic
+│   │   ├── ssh_controller.py    # SSH connection service (real or mock)
+│   │   ├── mock_e7.py           # Simulated E7-20 used by MOCK_MODE
+│   │   ├── ont_controller.py    # ONT data service
+│   │   └── hp_controller.py     # HP switch service
 │   └── utils/                    # Utility functions
-│       ├── __init__.py
 │       └── helpers.py           # Helper functions
+├── tests/                       # Pytest tests
 ├── main.py                      # FastAPI application entry point
 ├── config.py                    # Configuration settings
+├── conftest.py                  # Pytest fixtures
 ├── requirements.txt             # Python dependencies
 ├── env_example.txt              # Environment variables template
 ├── README.md                    # This file
@@ -81,9 +85,22 @@ rogue-api/
 
 The application uses Pydantic settings for configuration management. Key settings include:
 
+- **Mock Mode**: `MOCK_MODE=true` simulates the E7-20 instead of opening SSH
 - **SSH Connection**: Host, username, password, port, timeout
 - **API Settings**: Host, port, reload mode
 - **Logging**: Log level configuration
+
+## 🧪 Mock Mode (no hardware needed)
+
+Set `MOCK_MODE=true` in `.env` (or run `MOCK_MODE=true python main.py`) to develop without an E7-20.
+
+- `POST /api/v1/ssh/connect` accepts any host, username and password and opens no network connection.
+- Commands are answered by a simulated chassis in `app/controller/mock_e7.py`: 14 ONTs on two PONs, with a rogue ONT (`1/1/1:4`) on PON `1/1/1`.
+- `/api/v1/status` and `/api/v1/ssh/status` report `"mock_mode": true`, and `show version` starts with a `MOCK DEVICE` banner, so simulated data is never mistaken for the real network.
+
+Supported commands: the ones the controllers send (`show version`, `show interface`, `show ont info [id]`, `show ont performance <id>`, `show pon port status [port]`) and the ones in `notes.md` (`show gpon pon-errors gpon-1/1/1`, `show interface gpon-1/1/1 ont 4 statistics`, `show gpon ont-optical gpon-1/1/1`, and so on). Anything else returns `% Invalid command`.
+
+The mock output is an approximation and has not been compared with a real E7-20. Capture real CLI output and update `mock_e7.py` before trusting a parser against live equipment.
 
 ## 📚 API Endpoints
 

@@ -73,6 +73,7 @@ async def api_status() -> Dict[str, Any]:
     return {
         "api_version": settings.api_version,
         "status": "operational",
+        "mock_mode": settings.mock_mode,
         "target_platform": settings.target_platform,
         "cms_version": settings.cms_version,
         "endpoints": {

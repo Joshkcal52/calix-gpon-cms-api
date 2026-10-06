@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     ssh_password: Optional[str] = None
     ssh_timeout: int = 30
 
+    # Mock mode: simulate the E7-20 instead of opening an SSH connection.
+    # For development without lab hardware. Set MOCK_MODE=true in .env
+    mock_mode: bool = False
+
     # Target Platform Settings
     target_platform: str = "Calix E7-20 (GPON)"
     cms_version: str = "15.01.772"

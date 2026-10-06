@@ -1,3 +1,7 @@
+# Mock mode: set to true to simulate the E7-20 (no SSH connection is opened).
+# Use this when you have no lab hardware. Any host/username/password works.
+MOCK_MODE=false
+
 # SSH Connection Settings
 SSH_HOST=192.168.1.100
 SSH_USERNAME=admin
