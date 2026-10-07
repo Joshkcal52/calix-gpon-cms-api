@@ -17,7 +17,7 @@ x-app: &app
 x-app-env: &app-env
   KAFKA_BOOTSTRAP_SERVERS: kafka:9092
   MOCK_MODE: "false"
-  # The "real" CMS for this demo is the mock NBI server, reached with cms-nbi-client
+  # The "real" CMS for this demo is the mock NBI server, reached over plain HTTP by app/nbi/client.py
   CMS_HOST: mock-cms
   CMS_PORT: "18080"
   CMS_USERNAME: nbi-demo

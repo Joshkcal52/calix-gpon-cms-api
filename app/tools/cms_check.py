@@ -8,17 +8,20 @@ what it understood and which reply fields it did not recognise.
     export CMS_HOST=cms.example.internal CMS_USERNAME=... CMS_PASSWORD=...
     python -m app.tools.cms_check --network NTWK-OLT-04 [--ont-id 1204] [--dump ./cms-replies]
 
-IT CANNOT CHANGE ANYTHING. Every HTTP request it makes passes through a guard
-that refuses anything but login, logout and reads (an <edit-config> is never
-sent), and it only calls read operations. --dump saves every request and
+IT CANNOT CHANGE ANYTHING. Every request the CMS client sends passes through
+a guard that refuses anything but login, logout and reads (an <edit-config> is
+never sent), and it only calls read operations. --dump saves every request and
 reply, with the password and session ID blanked, for comparing against the
 assumptions listed in docs/ARCHITECTURE.md.
 
 Pick an --ont-id that has services, ideally an 844G with a router-side
 service: the ONT slot values it prints are what app/nbi/router_side.py needs.
 
+It uses the same CMS settings as the API, including CMS_SCHEME, CMS_VERIFY_TLS
+and CMS_CA_FILE for HTTPS.
+
 Exit code: 0 if every step worked, 1 if any step failed, 2 if it could not
-start (no CMS_HOST, library missing).
+start (no CMS_HOST, or a setting it cannot use).
 """
 
 import argparse
@@ -42,20 +45,19 @@ def _redact(text: str) -> str:
     return re.sub(r"(<SessionId>).*?(</SessionId>)", r"\1********\2", text, flags=re.S)
 
 
-def install_guard(requests_module: Any, dump: Optional[Path]) -> Callable[[], None]:
+def install_guard(client: Any, dump: Optional[Path]) -> Callable[[], None]:
     """
-    Wrap requests.post so only login, logout and reads can leave this
-    process. Returns a function that removes the guard.
+    Wrap the CMS client's send() (app/nbi/client.py), which every request to
+    CMS goes through, so only login, logout and reads can leave this process.
+    Returns a function that removes the guard.
     """
-    original = requests_module.post
+    original = client.send
     counter = {"n": 0}
 
-    def guarded(*args: Any, **kwargs: Any) -> Any:
-        body = kwargs.get("data") or (args[1] if len(args) > 1 else "") or ""
-        body = body.decode() if isinstance(body, bytes) else str(body)
+    async def guarded(body: str) -> Any:
         if "<edit-config" in body or not any(marker in body for marker in READ_ONLY_MARKERS):
             raise WriteBlocked("The read-only check refused to send a request that is not a read.")
-        response = original(*args, **kwargs)
+        response = await original(body)
         if dump is not None:
             counter["n"] += 1
             stem = dump / f"{counter['n']:03d}"
@@ -64,8 +66,8 @@ def install_guard(requests_module: Any, dump: Optional[Path]) -> Callable[[], No
                                                       f"{_redact(response.text)}", encoding="utf-8")
         return response
 
-    requests_module.post = guarded
-    return lambda: setattr(requests_module, "post", original)
+    client.send = guarded
+    return lambda: delattr(client, "send")
 
 
 class Report:
@@ -86,7 +88,7 @@ async def run_check(backend: Any, network: str, ont_id: Optional[int], report: R
     async def attempt(name: str, call: Callable[[], Any], describe: Callable[[Any], Any]) -> Any:
         try:
             result = await call()
-        except Exception as e:  # report everything, including library crashes
+        except Exception as e:  # report everything, including unexpected crashes
             report.step(name, False, f"{type(e).__name__}: {getattr(e, 'message', e)}")
             return None
         report.step(name, True, describe(result))
@@ -150,6 +152,8 @@ def main() -> None:
     parser.add_argument("--ont-id", type=int, help="ONT to read in full (default: the first one listed)")
     parser.add_argument("--host", default=settings.cms_host, help="CMS host (default: CMS_HOST)")
     parser.add_argument("--port", type=int, default=settings.cms_port, help="NBI port (default: CMS_PORT)")
+    parser.add_argument("--scheme", choices=("http", "https"), default=settings.cms_scheme,
+                        help="http or https (default: CMS_SCHEME)")
     parser.add_argument("--user", default=settings.cms_username, help="CMS user (default: CMS_USERNAME)")
     parser.add_argument("--timeout", type=float, default=max(settings.nbi_timeout_seconds, 30.0))
     parser.add_argument("--dump", help="Directory to save every request and reply (password blanked)")
@@ -160,19 +164,19 @@ def main() -> None:
         print("Set CMS_HOST (and CMS_USERNAME, CMS_PASSWORD) or pass --host. The password is only read from "
               "CMS_PASSWORD.", file=sys.stderr)
         sys.exit(2)
+    from app.nbi.cms_backend import CmsBackend
     try:
-        import requests
-        from app.nbi.cms_client_backend import CmsNbiClientBackend
-        backend = CmsNbiClientBackend(args.host, args.port, args.user, settings.cms_password or "",
-                                      timeout=args.timeout, router=router_side_addressing(settings))
-    except RuntimeError as e:
+        backend = CmsBackend(args.host, args.port, args.user, settings.cms_password or "", timeout=args.timeout,
+                             router=router_side_addressing(settings), scheme=args.scheme,
+                             verify=settings.cms_verify())
+    except ValueError as e:
         print(str(e), file=sys.stderr)
         sys.exit(2)
 
     dump = Path(args.dump) if args.dump else None
     if dump:
         dump.mkdir(parents=True, exist_ok=True)
-    remove_guard = install_guard(requests, dump)
+    remove_guard = install_guard(backend.client, dump)
     report = Report()
     try:
         asyncio.run(run_check(backend, args.network, args.ont_id, report))
@@ -183,7 +187,7 @@ def main() -> None:
     if args.json:
         print(json.dumps({"ok": report.ok, "steps": report.steps, **found}, indent=2, default=str))
     else:
-        print(f"CMS read-only check: http://{args.host}:{args.port}, network {args.network}\n")
+        print(f"CMS read-only check: {backend.client.url}, network {args.network}\n")
         print_text(report, found)
     sys.exit(0 if report.ok else 1)
 

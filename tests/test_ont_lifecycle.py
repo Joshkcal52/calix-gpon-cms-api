@@ -5,7 +5,7 @@ deleting services, deleting ONTs, and the profile and VLAN lookups.
 
 Two paths are covered:
   - the API with its queue and worker, against the in-process simulated CMS
-  - cms-nbi-client 0.1.0 speaking SOAP to the mock NBI server
+  - the CMS client (app/nbi/client.py) speaking SOAP to the mock NBI server
 """
 
 import asyncio
@@ -211,7 +211,7 @@ def test_ont_delete_checks_the_serial_and_the_services(api):
     assert elsewhere["error"]["code"] == "conflict" and "is ONT 4" in elsewhere["error"]["message"]
 
 
-# --- cms-nbi-client against the mock NBI server (real SOAP over HTTP) ---------------------
+# --- The CMS client against the mock NBI server (real SOAP over HTTP) ---------------------
 
 class Recorder:
     """Stands in for JobContext in direct handler calls"""
@@ -229,54 +229,19 @@ class Recorder:
 
 @pytest.fixture
 def cms(nbi_server):
-    pytest.importorskip("cmsnbiclient")
-    from app.nbi.cms_client_backend import CmsNbiClientBackend
+    from app.nbi.cms_backend import CmsBackend
 
     server, port = nbi_server
     server._fresh_state()
 
     def connect(router=MOCK_RG_ADDRESSING):
-        return CmsNbiClientBackend("127.0.0.1", port, "nbi-demo", "demo-password", timeout=3.0, router=router)
+        return CmsBackend("127.0.0.1", port, "nbi-demo", "demo-password", timeout=3.0, router=router)
 
     return server, connect
 
 
 def edits(server):
     return [r for r in server.app.state.requests if r["kind"] == "edit"]
-
-
-def _offline_library_client():
-    cmsnbiclient = pytest.importorskip("cmsnbiclient")
-    client = cmsnbiclient.Client.__new__(cmsnbiclient.Client)
-    client.session_id, client.cms_user_nm = "1", "x"
-    client.cms_nbi_config = {"cms_netconf_uri": {"e7": "/cmsexc/ex/netconf"}}
-    client.cms_netconf_url = "http://127.0.0.1:1/cmsexc/ex/netconf"
-    return cmsnbiclient, client
-
-
-def test_the_library_cannot_write_ethernet_ports_which_is_why_the_backend_sends_that_request_itself():
-    """If this starts failing, a fixed cms-nbi-client is installed and the backend's own OntEthGe XML can go"""
-    cmsnbiclient, client = _offline_library_client()
-    with pytest.raises(KeyError, match="subscr-id"):
-        cmsnbiclient.E7.Update(client, "NTWK-X", 1).ont_geth(ont_id="1", ontethge="1", admin_state="disabled")
-
-
-def test_the_library_drops_profile_changes_on_a_service_which_is_why_the_backend_sends_that_request_itself(
-        monkeypatch):
-    """If this starts failing, a fixed cms-nbi-client is installed and the backend's own EthSvc XML can go"""
-    cmsnbiclient, client = _offline_library_client()
-    sent = []
-
-    def capture(url, headers, data, timeout):
-        sent.append(data)
-        raise RuntimeError("captured")
-
-    monkeypatch.setattr(cmsnbiclient.E7.update.requests, "post", capture)
-    with pytest.raises(RuntimeError, match="captured"):
-        cmsnbiclient.E7.Update(client, "NTWK-X", 1).ont_ethsvc(
-            ont_id="5", ontslot="3", ontethany="1", ethsvc="1", bwprof_id="12", svctagaction_id="3", out_tag="200")
-    assert "<out-tag>200</out-tag>" in sent[0]
-    assert "bw-prof" not in sent[0] and "tag-action" not in sent[0]  # silently dropped
 
 
 def test_ports_router_and_lookups_through_the_real_client(cms):

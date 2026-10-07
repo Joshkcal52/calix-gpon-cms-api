@@ -94,14 +94,13 @@ def test_a_format_1_snapshot_from_the_old_rollback_can_still_be_compared():
 
 
 def test_compare_through_the_real_client_and_the_cli(nbi_server, tmp_path):
-    pytest.importorskip("cmsnbiclient")
-    from app.nbi.cms_client_backend import CmsNbiClientBackend
+    from app.nbi.cms_backend import CmsBackend
 
     server, port = nbi_server
     server._fresh_state()
 
     async def snapshot():
-        backend = CmsNbiClientBackend("127.0.0.1", port, "nbi-demo", "demo-password", router=MOCK_RG_ADDRESSING)
+        backend = CmsBackend("127.0.0.1", port, "nbi-demo", "demo-password", router=MOCK_RG_ADDRESSING)
         gateway = NbiGateway(backend, timeout=10)
         taken = await take_snapshot(gateway, NET, "OLT-MOCK", card="1/1")
         result = await compare_with_cms(gateway, taken)

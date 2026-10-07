@@ -28,10 +28,15 @@ data:
   KAFKA_TOPIC_PREFIX: "gpon-cms"
   RELOAD: "false"
   MOCK_MODE: "false"
-  # The CMS server, reached over plain HTTP by cms-nbi-client. The login comes
-  # from the cms-nbi-credentials Secret (keys: username, password).
+  # The CMS server, over HTTPS with its certificate checked. The login comes
+  # from the cms-nbi-credentials Secret (keys: username, password). Set
+  # CMS_PORT to your CMS's HTTPS NBI port. For a private CA, mount its
+  # certificate and set CMS_CA_FILE to its path. Only if CMS has no HTTPS:
+  # CMS_SCHEME "http" and port 18080, and the login crosses the network unencrypted.
   CMS_HOST: "cms.example.internal"
-  CMS_PORT: "18080"
+  CMS_SCHEME: "https"
+  CMS_PORT: "REPLACE_WITH_THE_HTTPS_NBI_PORT"
+  CMS_VERIFY_TLS: "true"
   # UNVERIFIED router-side (RG) addressing, empty until checked against your CMS
   # with python -m app.tools.cms_check (see app/nbi/router_side.py):
   # CMS_RG_SERVICE_SLOT, CMS_RG_PORT_TYPE, CMS_RG_PORT_ID_ELEMENT, CMS_RG_PORT_MODE_ELEMENT

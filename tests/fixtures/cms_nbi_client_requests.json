@@ -1,0 +1,469 @@
+{
+ "source": "cms-nbi-client 0.1.0 (https://github.com/somenetworking/CMS-NBI-Client), recorded against app/nbi/mock_cms_server.py. Message IDs and session IDs are replaced by N and S; whitespace between elements is removed (canonical XML).",
+ "steps": [
+  {
+   "step": "list_discovered_onts",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://schemas.xmlsoap.org/soap/envelope/\"><ns0:Body><auth message-id=\"N\"><login><UserName>nbi-demo</UserName><Password>demo-password</Password></login></auth></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get><filter type=\"subtree\"><top><object><type>System</type><id></id><children><type>DiscOnt</type><attr-filter></attr-filter><attr-list>op-stat crit maj min warn info derived-states reg-id prov-reg-id pon model vendor clei ont ontprof subscr-id descr curr-sw-vers alt-sw-vers curr-committed mfg-serno product-code curr-cust-vers alt-cust-vers onu-mac mta-mac link-permit-status</attr-list></children></object></top></filter></get></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "get_ont",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args><ont><type>Ont</type><id><ont>3</ont></id></ont></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>Ont</type><id><ont>3</ont></id><children><type>EthSvc</type><attr-filter></attr-filter><attr-list>admin descr tag-action bw-prof out-tag in-tag mcast-prof pon-cos us-cir-override us-pir-override ds-pir-override hot-swap pppoe-force-discard</attr-list></children></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "get_ont missing",
+   "outcome": "NbiNotFoundError",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args><ont><type>Ont</type><id><ont>999</ont></id></ont></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "find_ont_by_serial",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args><serno>A3F104</serno></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>Ont</type><id><ont>4</ont></id><children><type>EthSvc</type><attr-filter></attr-filter><attr-list>admin descr tag-action bw-prof out-tag in-tag mcast-prof pon-cos us-cir-override us-pir-override ds-pir-override hot-swap pppoe-force-discard</attr-list></children></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "find_ont_by_serial none",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args><serno>FFFFFF</serno></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "find_onts_by_subscriber",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args><subscr-id>SUB-1003 &amp; &lt;x&gt;</subscr-id></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "list_onts",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "create_ont",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object get-config=\"true\" operation=\"create\"><type>Ont</type><id><ont>0</ont></id><admin>enabled</admin><serno>C4D301</serno><reg-id></reg-id><subscr-id>SUB-3001</subscr-id><descr>9 Elm \"Rd\" &amp; &lt;co&gt;</descr><pwe3prof><type>OntPwe3Prof</type><id><ontpwe3prof>1</ontpwe3prof></id></pwe3prof><ontprof><type>OntProf</type><id><ontprof>844G-1</ontprof></id></ontprof><us-sdber-rate>5</us-sdber-rate><low-rx-opt-pwr-ne-thresh>-30.0</low-rx-opt-pwr-ne-thresh><high-rx-opt-pwr-ne-thresh>-7.0</high-rx-opt-pwr-ne-thresh><battery-present>false</battery-present><pse-max-power-budget>30</pse-max-power-budget><poe-class-control>disabled</poe-class-control></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "create_ont dup",
+   "outcome": "NbiConflictError",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object get-config=\"true\" operation=\"create\"><type>Ont</type><id><ont>0</ont></id><admin>enabled</admin><serno>C4D301</serno><reg-id></reg-id><subscr-id></subscr-id><descr></descr><pwe3prof><type>OntPwe3Prof</type><id><ontpwe3prof>1</ontpwe3prof></id></pwe3prof><ontprof><type>OntProf</type><id><ontprof>844G-1</ontprof></id></ontprof><us-sdber-rate>5</us-sdber-rate><low-rx-opt-pwr-ne-thresh>-30.0</low-rx-opt-pwr-ne-thresh><high-rx-opt-pwr-ne-thresh>-7.0</high-rx-opt-pwr-ne-thresh><battery-present>false</battery-present><pse-max-power-budget>30</pse-max-power-budget><poe-class-control>disabled</poe-class-control></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "add_ethernet_service",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>Ont</type><id><ont>15</ont></id><children><type>EthSvc</type><attr-filter></attr-filter><attr-list>admin descr tag-action bw-prof out-tag in-tag mcast-prof pon-cos us-cir-override us-pir-override ds-pir-override hot-swap pppoe-force-discard</attr-list></children></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object get-config=\"true\" operation=\"create\"><type>EthSvc</type><id><ont>15</ont><ontslot>3</ontslot><ontethany>1</ontethany><ethsvc>1</ethsvc></id><admin>enabled</admin><descr>data &amp; more</descr><tag-action><type>SvcTagAction</type><id><svctagaction>1</svctagaction></id></tag-action><bw-prof><type>BwProf</type><id><bwprof>RES-1G</bwprof></id></bw-prof><out-tag>100</out-tag><in-tag>none</in-tag><mcast-prof></mcast-prof><pon-cos>derived</pon-cos><us-cir-override>none</us-cir-override><us-pir-override>none</us-pir-override><ds-pir-override>none</ds-pir-override><hot-swap>false</hot-swap><pppoe-force-discard>false</pppoe-force-discard></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "add_router_service",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>Ont</type><id><ont>15</ont></id><children><type>EthSvc</type><attr-filter></attr-filter><attr-list>admin descr tag-action bw-prof out-tag in-tag mcast-prof pon-cos us-cir-override us-pir-override ds-pir-override hot-swap pppoe-force-discard</attr-list></children></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object get-config=\"true\" operation=\"create\"><type>EthSvc</type><id><ont>15</ont><ontslot>UNVERIFIED-RG</ontslot><ontethany>1</ontethany><ethsvc>1</ethsvc></id><admin>enabled</admin><descr></descr><tag-action><type>SvcTagAction</type><id><svctagaction>1</svctagaction></id></tag-action><bw-prof><type>BwProf</type><id><bwprof>RES-1G</bwprof></id></bw-prof><out-tag>300</out-tag><in-tag>none</in-tag><mcast-prof></mcast-prof><pon-cos>derived</pon-cos><us-cir-override>none</us-cir-override><us-pir-override>none</us-pir-override><ds-pir-override>none</ds-pir-override><hot-swap>false</hot-swap><pppoe-force-discard>false</pppoe-force-discard></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "add_service bad vlan",
+   "outcome": "NbiRejectedError",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>Ont</type><id><ont>15</ont></id><children><type>EthSvc</type><attr-filter></attr-filter><attr-list>admin descr tag-action bw-prof out-tag in-tag mcast-prof pon-cos us-cir-override us-pir-override ds-pir-override hot-swap pppoe-force-discard</attr-list></children></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object get-config=\"true\" operation=\"create\"><type>EthSvc</type><id><ont>15</ont><ontslot>3</ontslot><ontethany>1</ontethany><ethsvc>2</ethsvc></id><admin>enabled</admin><descr></descr><tag-action><type>SvcTagAction</type><id><svctagaction>1</svctagaction></id></tag-action><bw-prof><type>BwProf</type><id><bwprof>RES-1G</bwprof></id></bw-prof><out-tag>999</out-tag><in-tag>none</in-tag><mcast-prof></mcast-prof><pon-cos>derived</pon-cos><us-cir-override>none</us-cir-override><us-pir-override>none</us-pir-override><ds-pir-override>none</ds-pir-override><hot-swap>false</hot-swap><pppoe-force-discard>false</pppoe-force-discard></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "update_service",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object operation=\"merge\"><type>EthSvc</type><id><ont>15</ont><ontslot>3</ontslot><ontethany>1</ontethany><ethsvc>1</ethsvc></id><admin>disabled</admin><tag-action><type>SvcTagAction</type><id><svctagaction>2</svctagaction></id></tag-action><bw-prof><type>BwProf</type><id><bwprof>VOICE</bwprof></id></bw-prof><out-tag>200</out-tag></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "get_ont_ports",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args><ont><type>Ont</type><id><ont>15</ont></id></ont></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>OntProf</type><id><ontprof>844G-1</ontprof></id></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>Ont</type><id><ont>15</ont></id><children><type>EthSvc</type><attr-filter></attr-filter><attr-list>admin descr tag-action bw-prof out-tag in-tag mcast-prof pon-cos us-cir-override us-pir-override ds-pir-override hot-swap pppoe-force-discard</attr-list></children></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>OntEthGe</type><id><ont>15</ont><ontslot>3</ontslot><ontethge>1</ontethge></id></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>OntEthGe</type><id><ont>15</ont><ontslot>3</ontslot><ontethge>2</ontethge></id></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>OntEthGe</type><id><ont>15</ont><ontslot>3</ontslot><ontethge>3</ontethge></id></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>OntEthGe</type><id><ont>15</ont><ontslot>3</ontslot><ontethge>4</ontethge></id></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>UnverifiedRgPort</type><id><ont>15</ont><unverifiedrgport>1</unverifiedrgport></id></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "update_port eth",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object operation=\"merge\"><type>OntEthGe</type><id><ont>15</ont><ontslot>3</ontslot><ontethge>2</ontethge></id><admin>disabled</admin><descr>x&lt;y</descr><sec><id><ethsecprof>3</ethsecprof></id><type>EthSecProf</type></sec><subscr-id>S&amp;1</subscr-id></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "update_port rg",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object operation=\"merge\"><type>UnverifiedRgPort</type><id><ont>15</ont><unverifiedrgport>1</unverifiedrgport></id><admin>disabled</admin></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "list_ont_profiles",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>System</type><id></id><children><type>OntProf</type><attr-filter></attr-filter><attr-list>name vendor model pots feth geth hpnaeth ds1 rfvid hotrfvid eth-oam-capable convert-mcast-capable rg fb default-to-rg</attr-list></children></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "list_vlans",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>System</type><id></id><children><type>Vlan</type><attr-list>name igmp-mode igmp-prof dhcp-mode mac-force-forw ip-src-verify mac-learn ae-ont-discovery pon-tlan pon-hairpin igmp-pbit dhcp-svc-prof option82-enable eth-opt82prof gpon-opt82prof mobility pppoe-prof</attr-list></children></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "delete_service",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object operation=\"delete\"><type>EthSvc</type><id><ont>15</ont><ontslot>3</ontslot><ontethany>1</ontethany><ethsvc>1</ethsvc></id></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "delete_ont",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><edit-config><target><running></running></target><config><top><object force=\"true\" operation=\"delete\"><type>Ont</type><id><ont>15</ont></id></object></top></config></edit-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "session re-login",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args><ont><type>Ont</type><id><ont>1</ont></id></ont></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://schemas.xmlsoap.org/soap/envelope/\"><ns0:Body><auth message-id=\"N\"><login><UserName>nbi-demo</UserName><Password>demo-password</Password></login></auth></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args><ont><type>Ont</type><id><ont>1</ont></id></ont></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    },
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-MOCK-E7\" sessionid=\"S\" username=\"nbi-demo\"><get-config><source><running></running></source><filter type=\"subtree\"><top><object><type>Ont</type><id><ont>1</ont></id><children><type>EthSvc</type><attr-filter></attr-filter><attr-list>admin descr tag-action bw-prof out-tag in-tag mcast-prof pon-cos us-cir-override us-pir-override ds-pir-override hot-swap pppoe-force-discard</attr-list></children></object></top></filter></get-config></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "network unknown",
+   "outcome": "NbiNotFoundError",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://www.w3.org/2003/05/soap-envelope\"><ns0:Body><rpc message-id=\"N\" nodename=\"NTWK-NOPE\" sessionid=\"S\" username=\"nbi-demo\"><action><action-type>show-ont</action-type><action-args><ont><type>Ont</type><id><ont>1</ont></id></ont></action-args></action></rpc></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "close",
+   "outcome": "ok",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://schemas.xmlsoap.org/soap/envelope/\"><ns0:Body><auth message-id=\"N\"><logout><UserName>nbi-demo</UserName><SessionId>S</SessionId></logout></auth></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  },
+  {
+   "step": "bad login",
+   "outcome": "NbiAuthError",
+   "requests": [
+    {
+     "path": "/cmsexc/ex/netconf",
+     "headers": {
+      "user-agent": "CMS_NBI_CONNECT-nbi-demo",
+      "content-type": "text/xml;charset=ISO-8859-1"
+     },
+     "body": "<ns0:Envelope xmlns:ns0=\"http://schemas.xmlsoap.org/soap/envelope/\"><ns0:Body><auth message-id=\"N\"><login><UserName>nbi-demo</UserName><Password>wrong</Password></login></auth></ns0:Body></ns0:Envelope>"
+    }
+   ]
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 """
 Tests for the legacy GPON layer: the event and translation models, the signup
-and cutover flows through the API, and the cms-nbi-client backend talking
+and cutover flows through the API, and the CMS backend and client talking
 SOAP to the mock CMS NBI server.
 """
 
@@ -223,18 +223,17 @@ def test_cutover_failures_publish_nothing_and_say_why(api):
     assert len(api.app.state.bus.dead_letters) == 3
 
 
-# --- cms-nbi-client against the mock NBI server (real SOAP over HTTP) ----------------------
+# --- The CMS client against the mock NBI server (real SOAP over HTTP) ----------------------
 
 @pytest.fixture
 def cms(nbi_server):
-    pytest.importorskip("cmsnbiclient")
-    from app.nbi.cms_client_backend import CmsNbiClientBackend
+    from app.nbi.cms_backend import CmsBackend
 
     server, port = nbi_server
     server._fresh_state()
 
     def connect(password="demo-password", timeout=3.0):
-        return CmsNbiClientBackend("127.0.0.1", port, "nbi-demo", password, timeout=timeout)
+        return CmsBackend("127.0.0.1", port, "nbi-demo", password, timeout=timeout)
 
     return server, connect
 
@@ -343,7 +342,7 @@ def test_cms_client_backend_survives_an_expired_session_and_reports_outages(cms)
 
 
 def test_signup_and_cutover_through_the_real_client(cms):
-    """The whole legacy path with SOAP on the wire: gateway -> cms-nbi-client -> mock NBI server"""
+    """The whole legacy path with SOAP on the wire: gateway -> CMS client -> mock NBI server"""
     from app.legacy.handlers import build_legacy_handlers
     from app.messaging.bus import InMemoryBus
 

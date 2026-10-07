@@ -263,13 +263,18 @@ def build_gateway(settings: Any) -> NbiGateway:
         backend: NbiBackend = MockCmsBackend()
         logger.warning("MOCK_MODE is on: CMS calls go to a simulated CMS, not a real one")
     elif settings.cms_host:
-        from app.nbi.cms_client_backend import CmsNbiClientBackend
+        from app.nbi.cms_backend import CmsBackend
         from app.nbi.router_side import router_side_addressing
-        backend = CmsNbiClientBackend(
+        backend = CmsBackend(
             host=settings.cms_host, port=settings.cms_port,
             username=settings.cms_username, password=settings.cms_password or "",
-            timeout=settings.nbi_timeout_seconds, router=router_side_addressing(settings))
-        logger.info(f"CMS backend: cms-nbi-client -> http://{settings.cms_host}:{settings.cms_port}")
+            timeout=settings.nbi_timeout_seconds, router=router_side_addressing(settings),
+            scheme=settings.cms_scheme, verify=settings.cms_verify())
+        logger.info(f"CMS backend: {backend.client.url}")
+        if settings.cms_scheme == "http":
+            logger.warning("CMS_SCHEME is http: the CMS login and every request cross the network unencrypted")
+        elif settings.cms_verify() is False:
+            logger.warning("CMS_VERIFY_TLS is false: the CMS server's certificate is not checked")
     else:
         backend = NotConfiguredBackend()
 

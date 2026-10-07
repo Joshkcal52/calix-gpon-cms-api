@@ -103,15 +103,16 @@ python -m app.legacy.snapshot --compare ./cutover/<file>.snapshot.yml
 ## Connecting to a real CMS
 
 ```bash
-pip install -r requirements-cms.txt
 export CMS_HOST=cms.example.internal CMS_USERNAME=... CMS_PASSWORD=...
+export CMS_SCHEME=https CMS_PORT=<the HTTPS NBI port>        # if your CMS offers HTTPS
+export CMS_CA_FILE=/path/to/cms-ca.pem                        # if its certificate is from a private CA
 export API_KEYS=portal:choose-a-long-random-key
 python -m app.tools.cms_check --network NTWK-... --ont-id <id>   # do this first
 ```
 
 Before the first change on a real CMS, know that:
 
-- **CMS traffic is unencrypted.** The CMS client library only speaks plain HTTP on port 18080.
+- **Use HTTPS if CMS offers it.** The default is plain HTTP on port 18080, as CMS ships, and then the CMS login crosses the network unencrypted. With `CMS_SCHEME=https` the server's certificate is checked (against `CMS_CA_FILE` if set); `CMS_VERIFY_TLS=false` turns that off, with a warning. HTTPS has only been tested against the mock server.
 - **Router-side support is switched off until configured.** How CMS addresses the router side of ONTs such as the 844G is not known here. Until the four `CMS_RG_*` settings are filled in from a real CMS, router-side changes are refused and port modes read as `unknown`. The read-only check prints what to set; details are in `app/nbi/router_side.py`.
 - **Voice is not handled.** See "What it does not do: voice" above.
 - **CMS expects database IDs, not names**, for profiles and tag actions, and network names in the form `NTWK-...`.
@@ -125,6 +126,7 @@ Settings come from environment variables or a `.env` file. `env_example.txt` has
 |---|---|
 | `MOCK_MODE` | `true` uses the simulated CMS. Nothing real is touched. |
 | `CMS_HOST`, `CMS_PORT`, `CMS_USERNAME`, `CMS_PASSWORD` | The real CMS. Ignored when `MOCK_MODE` is on. |
+| `CMS_SCHEME`, `CMS_VERIFY_TLS`, `CMS_CA_FILE` | `http` (default) or `https`; the certificate check (on by default) and the CA to check it against. |
 | `API_KEYS` | Comma-separated keys (or `name:key`) required on every `/api/v2` route. Optional only in mock mode. |
 | `CORS_ALLOW_ORIGINS` | Browser origins allowed to call the API, comma-separated. Empty (the default) allows none. |
 | `RELOAD` | `true` restarts `python main.py` on code changes. Off by default. |
@@ -157,7 +159,7 @@ pip install -r requirements-test.txt
 pytest
 ```
 
-Run on Python 3.10 and 3.12. The tests run every CMS operation through the real client library over SOAP against the mock CMS server, and the queue rules over the Kafka wire protocol against an in-process Kafka mock.
+Run on Python 3.10 and 3.12. The tests run every CMS operation through the CMS client over SOAP (HTTP and HTTPS) against the mock CMS server, check it sends the same requests cms-nbi-client did, and the queue rules over the Kafka wire protocol against an in-process Kafka mock.
 
 ## Project layout
 
@@ -165,7 +167,7 @@ Run on Python 3.10 and 3.12. The tests run every CMS operation through the real 
 app/
   routes/       REST routes
   controller/   provisioning workflows and job tracking
-  nbi/          CMS gateway, CMS client backend, simulated CMS and mock CMS server
+  nbi/          CMS gateway, CMS client and backend, simulated CMS and mock CMS server
   legacy/       signup and cutover events, export, SMx plan, snapshots
   messaging/    the queue: in-process or Kafka
   worker/       background worker (python -m app.worker)
@@ -184,6 +186,6 @@ config.py       settings
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the design, the delivery rules, and the full list of what is inferred
 - [deploy/demo/README.md](deploy/demo/README.md): the multi-process demo
 
-## Credits and licence
+## Credits
 
-The SOAP requests are built by [cms-nbi-client](https://github.com/somenetworking/CMS-NBI-Client) by somenetworking, which is licensed GPL-3.0. That licence matters if this service is ever distributed outside your organisation.
+The shapes of the CMS requests were learned from [cms-nbi-client](https://github.com/somenetworking/CMS-NBI-Client) by somenetworking, which this project used before it had its own client (`app/nbi/client.py`). Thank you.
