@@ -99,7 +99,7 @@ def router_side_addressing(settings: Any) -> Optional[RouterAddressing]:
 def read_port_mode(addressing: Optional[RouterAddressing], reply: Any) -> str:
     """
     UNVERIFIED reading rule for an Ethernet port's mode (see item 3 above).
-    `reply` is the OntEthGe object as parsed by xmltodict.
+    `reply` is the OntEthGe object as plain data (app/nbi/client.py:to_data).
     """
     if addressing is None or not addressing.port_mode_element or not isinstance(reply, dict):
         return "unknown"

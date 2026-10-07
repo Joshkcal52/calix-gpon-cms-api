@@ -1,7 +1,7 @@
 """
 Mock CMS NBI Server
 A stand-in for the Calix CMS northbound interface that speaks SOAP over HTTP,
-so the real client path (cms-nbi-client) can be
+so the real client path (app/nbi/client.py and app/nbi/cms_backend.py) can be
 exercised without a CMS.
 
     uvicorn app.nbi.mock_cms_server:app --port 18080
@@ -10,9 +10,10 @@ It listens where CMS does (POST /cmsexc/ex/netconf) and keeps its data in the
 simulated CMS from app/nbi/mock_cms.py: one network, NTWK-MOCK-E7.
 
 WHERE THE XML SHAPES COME FROM: every request shape, and every part of a
-reply that cms-nbi-client 0.1.0 reads, is taken from that library's source.
-Fields the library never looks at (op-stat, linked-pon, model, the error
-tags) are educated guesses. Nothing here has been compared with a real CMS.
+reply that the cms-nbi-client library (0.1.0) reads, was taken from that
+library, which this project used to depend on. Fields the library never
+looked at (op-stat, linked-pon, model, the error tags) are educated guesses.
+Nothing here has been compared with a real CMS.
 
   - OntEthGe (Ethernet port) replies reuse the element names of the library's
     write request (admin, subscr-id, descr, sec/EthSecProf). That a read
@@ -22,6 +23,10 @@ tags) are educated guesses. Nothing here has been compared with a real CMS.
   - The router side (RG), and each Ethernet port's bridge/router mode, use the
     deliberately fake names in app/nbi/router_side.py:MOCK_RG_ADDRESSING.
     Calix's are not known.
+  - Paging is off unless MOCK_CMS_PAGE_SIZE is set. Then show-ont and every
+    list of children answer that many items at a time, end with <more/> while
+    there are more, and start after the item named by an <after> element. The
+    shape is the one the library expected; a real CMS has not been seen paging.
 
 Helper endpoints for demos and tests (not part of CMS):
     GET  /mock/state                  every ONT, as JSON
@@ -64,6 +69,8 @@ def _fresh_state() -> None:
         latency=float(os.getenv("MOCK_CMS_LATENCY", "0.02")),
         ranging_seconds=float(os.getenv("MOCK_CMS_RANGING_SECONDS", "1.5")),
         extra_onts=int(os.getenv("MOCK_CMS_EXTRA_ONTS", "0")))
+    page_size = int(os.getenv("MOCK_CMS_PAGE_SIZE", "0"))
+    app.state.page_size = page_size if page_size > 0 else None  # None: never page
     app.state.sessions = set()
     app.state.requests = []  # one entry per NBI request: what kind it was, for tests and the read-only check
 
@@ -282,7 +289,7 @@ def _describe(auth: Optional[ElementTree.Element], rpc: Optional[ElementTree.Ele
 def _handle_auth(auth: ElementTree.Element) -> Response:
     if _has(auth, "./login"):
         ok = (_text(auth, "./login/UserName") == _username()
-              and secrets.compare_digest(_text(auth, "./login/Password"), _password()))
+              and secrets.compare_digest(_text(auth, "./login/Password").encode(), _password().encode()))
         if not ok:
             return _auth_reply(6)
         session_id = str(secrets.randbelow(900_000_000) + 100_000_000)
@@ -311,18 +318,50 @@ async def _handle_action(network: str, action: ElementTree.Element) -> str:
                and (not pon_port or o.pon_port == pon_port)]
     if not matches:
         return "<action-reply/>"
-    return "<action-reply>" + "".join(
-        f"<match><get><object>{_ont_xml(o)}</object></get></match>" for o in matches) + "</action-reply>"
+    page = _page([f"<match><get><object>{_ont_xml(o)}</object></get></match>"
+                  for o in sorted(matches, key=lambda o: o.ont_id)], args, "./get/object/id")
+    return f"<action-reply>{page}</action-reply>"
+
+
+def _canonical(element: Optional[ElementTree.Element]) -> str:
+    if element is None:
+        return ""
+    for node in element.iter():
+        node.text = (node.text or "").strip() or None
+        node.tail = None
+    return ElementTree.canonicalize(ElementTree.tostring(element, encoding="unicode"))
+
+
+def _page(items: List[str], request: Optional[ElementTree.Element], id_path: str) -> str:
+    """
+    Items as one page: all of them unless paging is on (MOCK_CMS_PAGE_SIZE).
+    `request` is the element that may hold <after>; `id_path` finds an item's
+    <id> inside it.
+    """
+    size = app.state.page_size
+    if size is None:
+        return "".join(items)
+    start = 0
+    after = request.find("./after/id") if request is not None else None
+    if after is not None:
+        wanted = _canonical(after)
+        ids = [_canonical(_strip_namespaces(ElementTree.fromstring(item)).find(id_path)) for item in items]
+        if wanted not in ids:
+            raise RpcError("invalid-value", "The <after> element names an item that is not in this list.")
+        start = ids.index(wanted) + 1
+    page = items[start:start + size]
+    return "".join(page) + ("<more/>" if start + size < len(items) else "")
 
 
 async def _handle_get(network: str, rpc: ElementTree.Element) -> str:
     target = rpc.find(".//top/object")
     object_type, child_type = _text(target, "./type"), _text(target, "./children/type")
     cms: MockCmsBackend = app.state.cms
+    request = target.find("./children") if target is not None else None
 
     if object_type == "System" and child_type == "DiscOnt":
-        children = "".join(f"<child>{_discovered_xml(o)}</child>"
-                           for o in await cms.list_discovered_onts(network))
+        children = _page([f"<child>{_discovered_xml(o)}</child>"
+                          for o in await cms.list_discovered_onts(network)], request, "./id")
         return f"<data><top><object><type>System</type><id/><children>{children}</children></object></top></data>"
 
     if object_type == "DiscOnt":
@@ -333,12 +372,14 @@ async def _handle_get(network: str, rpc: ElementTree.Element) -> str:
         raise RpcError("data-missing", f"Discovered ONT {serno} does not exist on {network}.")
 
     if object_type == "System" and child_type == "OntProf":
-        children = "".join(f"<child>{_profile_xml(p)}</child>" for p in await cms.list_ont_profiles(network))
+        children = _page([f"<child>{_profile_xml(p)}</child>" for p in await cms.list_ont_profiles(network)],
+                         request, "./id")
         return f"<data><top><object><type>System</type><id/><children>{children}</children></object></top></data>"
 
     if object_type == "System" and child_type == "Vlan":
-        children = "".join(f'<child><type>Vlan</type><id><vlan name="{escape(v.name or "")}">{v.id}</vlan></id>'
-                           f"<name>{escape(v.name or '')}</name></child>" for v in await cms.list_vlans(network))
+        children = _page([f'<child><type>Vlan</type><id><vlan name="{escape(v.name or "")}">{v.id}</vlan></id>'
+                          f"<name>{escape(v.name or '')}</name></child>" for v in await cms.list_vlans(network)],
+                         request, "./id")
         return f"<data><top><object><type>System</type><id/><children>{children}</children></object></top></data>"
 
     if object_type == "OntProf":
@@ -363,7 +404,8 @@ async def _handle_get(network: str, rpc: ElementTree.Element) -> str:
     if object_type == "Ont":
         ont = await cms.get_ont(network, _int(_text(target, "./id/ont"), "ONT ID"))
         if child_type == "EthSvc":
-            children = "".join(f"<child>{_service_xml(ont.ont_id, s)}</child>" for s in ont.services)
+            children = _page([f"<child>{_service_xml(ont.ont_id, s)}</child>" for s in ont.services],
+                             request, "./id")
             return (f"<data><top><object><type>Ont</type><id><ont>{ont.ont_id}</ont></id>"
                     f"<children>{children}</children></object></top></data>")
         return f"<data><top><object>{_ont_xml(ont)}</object></top></data>"

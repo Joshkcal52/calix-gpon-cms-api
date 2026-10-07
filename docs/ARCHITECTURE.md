@@ -36,7 +36,8 @@ Every route is under `/api/v2` and needs an API key, except `/` and `/health`. T
 |---|---|---|
 | **FastAPI** (`main.py`, `app/routes/`) | API keys. CORS (no origin allowed unless `CORS_ALLOW_ORIGINS` lists it). Validating every request with Pydantic. Answering reads. Writing commands to the bus and answering `202`. Serving job status and the SSE stream. | Executing a queued change itself. |
 | **NBI gateway** (`app/nbi/gateway.py`) | Every call to CMS: timeout, read retries, circuit breaker, concurrency cap, typed errors. | Business logic. It runs one CMS operation per call. |
-| **CMS backend** (`app/nbi/cms_client_backend.py`) | Turning one operation into one SOAP exchange through `cms-nbi-client`, and replies into models. Recording reply fields it does not recognise. | Retries or policy. |
+| **CMS backend** (`app/nbi/cms_backend.py`) | Turning one operation into the CMS requests that carry it out, and replies into models. Recording reply fields it does not recognise. | Retries or policy. |
+| **CMS client** (`app/nbi/client.py`) | The connection to CMS: HTTP or HTTPS with certificate checks, login and session, paging, escaping, typed errors. | Knowing what any object means. |
 | **Router side** (`app/nbi/router_side.py`) | Everything about the router (RG) side of an ONT that is not known: how router-side services and ports are addressed, and how a port's bridge/router mode appears. | Guessing. Unconfigured pieces are refused or read as "unknown". |
 | **Message bus** (`app/messaging/`) | Carrying commands to workers and job updates back. Kafka in production, in-process queues for development. | Deciding what a command means. |
 | **Workers** (`app/worker/`) | Running commands and acknowledging them only when the outcome is settled. | Serving HTTP, keeping state between commands. |
@@ -153,23 +154,22 @@ Every CMS failure reaches the client, or the failed job, in one shape:
 | Demo topology | `deploy/demo/` (Docker Compose, or four local processes) | Kafka, API, worker, mock CMS NBI server and a stand-in XGS listener. |
 | Production shape | API: `uvicorn main:app`. Workers: `WORKER_LANES=provisioning` and `WORKER_LANES=legacy python -m app.worker`. `CMS_HOST` and `API_KEYS` set. | See `deploy/k8s/gpon-cms.yaml`. |
 
-## The CMS client: cms-nbi-client 0.1.0
+## The CMS client
 
-[cms-nbi-client](https://github.com/somenetworking/CMS-NBI-Client), by somenetworking, builds the SOAP requests. It is licensed **GPL-3.0**, which matters if this service is ever distributed outside your organisation. Version 2.0.0 does not install (it depends on `python-keyring`, which is not on PyPI) and does not import. 0.1.0 is what this project uses.
+`app/nbi/client.py` is the only code that talks to CMS over the network. It knows the transport, not the network: the SOAP envelopes, login and session, paging, escaping and errors. `app/nbi/cms_backend.py` decides which objects to read or change and what the replies mean.
 
-What 0.1.0 does not do, and where that is handled:
-
-| Gap in the library | Handled by |
+| What | How |
 |---|---|
-| Synchronous (`requests`) | The backend runs each call in a worker thread. |
-| No retries, timeouts policy or circuit breaker | The NBI gateway. |
-| No connection pooling | Not handled. Acceptable at provisioning volumes. |
-| Returns the raw HTTP response on failure instead of raising | The backend maps replies to typed errors. |
-| Values are placed into XML unescaped | The backend escapes every value first. |
-| `E7.Update.ont_geth()` (Ethernet ports) raises `KeyError` on every call | The backend sends that request itself, in the XML shape the library would produce. A test pins the bug. |
-| `E7.Update.ont_ethsvc()` silently drops tag action and bandwidth profile changes (`pydash.get` called with its arguments swapped) | The backend sends that request itself. A test pins the bug. |
-| **HTTP only.** Its HTTPS branch is not implemented. | **Not handled.** The CMS login and all traffic are unencrypted. |
-| Writes `cms_nbi_config.json` into the working directory | The backend gives it a scratch directory. |
+| HTTP or HTTPS | `CMS_SCHEME` (default `http`) and `CMS_PORT`. Over HTTPS the server's certificate is checked against the system's CAs, or against `CMS_CA_FILE`. Only `CMS_VERIFY_TLS=false` turns the check off, and the API logs a warning when it is off or when the scheme is `http`. |
+| Session | Logs in on first use. If CMS says the session is gone (`rpc-error` `access-denied`), logs in once more and resends; a second refusal is `cms_auth_failed`. Logs out on shutdown. |
+| Errors | Timeouts, refused connections, TLS failures, HTTP errors and `rpc-error` replies become the typed errors in the table above. |
+| Escaping | Every value is escaped into the XML, including the login. Requests go out as ASCII, with any other character as a character reference. |
+| Paging | When a list ends with `<more/>`, asks again with `<after>` naming the last item, until there is no more. A CMS that repeats a page is refused, not looped over. |
+| Async | One `httpx` connection pool per process; no worker threads. The gateway adds timeouts, read retries, the breaker and the concurrency cap. |
+
+**Where the request shapes come from.** This project used to send its requests through [cms-nbi-client](https://github.com/somenetworking/CMS-NBI-Client) 0.1.0 by somenetworking, and that project is the reference the request shapes were learned from. Before it was removed, every request it sent for every operation used here was recorded against the mock NBI server (`tests/fixtures/cms_nbi_client_requests.json`). The client was written fresh from those recordings, and `tests/test_cms_client.py` checks that it sends the same requests: the same URL, headers and XML (compared in canonical form, so indentation aside), apart from the random message and session IDs. No code from the library is used.
+
+Two requests always differed from the library's, on purpose: its Ethernet port update raised `KeyError` and its service update silently dropped tag-action and bandwidth-profile changes, so this project built those two itself, in the shape the library meant to send. Where the new client goes beyond the library, it is untested against a real CMS: paging (the library's `show-ont` paging could not have handled a page holding more than one ONT, and the mock never paged), HTTPS (the library had none), and escaping of the login (the library did not escape it).
 
 ## What is verified, and what is not
 
@@ -177,23 +177,25 @@ Verified by the test suite (`requirements-test.txt`, run on Python 3.10 and 3.12
 
 - Gateway, circuit breaker, error mapping, validation, API keys on every `/api/v2` route.
 - The worker's acknowledgement rules, on the in-process bus and over the real Kafka wire protocol against librdkafka's mock cluster, including a worker killed with SIGKILL mid-job.
-- Every CMS operation through `cms-nbi-client` 0.1.0 over SOAP against the mock NBI server: ONTs, Ethernet ports, router-side services and ports (with the mock's fake addressing), service update and delete, profiles, VLANs, session expiry, timeouts.
+- Every CMS operation through the CMS client over SOAP against the mock NBI server: ONTs, Ethernet ports, router-side services and ports (with the mock's fake addressing), service update and delete, profiles, VLANs, session expiry, timeouts. Each sends the same requests cms-nbi-client 0.1.0 sent (recorded before it was removed).
+- HTTPS against the mock NBI server with a certificate from a private CA: refused by default, accepted with `CMS_CA_FILE`, accepted with `CMS_VERIFY_TLS=false`; the read-only check over HTTPS. Paging, against the mock's paging.
 - Activation, signup, every lifecycle change run twice, rollback of a new ONT, export (JSON, CSV, card and PON scope), the SMx plan from a filled-in CSV, snapshot compare, and the read-only check (including that it sends no edit and blanks the password in dumps).
 - The voice status on every export record and plan, including `unknown` for an ONT, ports or profile count that could not be read.
 
 Inferred, not verified, because nobody on this project has a real CMS:
 
-- **Every reply field the library does not parse**: `op-stat` values, `linked-pon`, `reg-id`, the `rpc-error` tags, the expired-session signal, the serial-number short form, the element names in an Ethernet port (OntEthGe) reply, and the meaning of OntProf values (port counts, `true`/`false`).
+- **Every reply field cms-nbi-client did not parse**: `op-stat` values, `linked-pon`, `reg-id`, the `rpc-error` tags, the expired-session signal, the serial-number short form, the element names in an Ethernet port (OntEthGe) reply, and the meaning of OntProf values (port counts, `true`/`false`).
 - **The router side and port modes**: not known at all; see `app/nbi/router_side.py`.
 - **The voice port count**: read from the OntProf `pots` attribute. That it is a count of voice ports is inferred.
-- **The IDI docs say "the Calix API expects 200 + the port number" for Ethernet ports** (port 1 as 201). The library uses plain port numbers. Which one your CMS wants is unknown; `cms_check` prints the port IDs of real services.
+- **The IDI docs say "the Calix API expects 200 + the port number" for Ethernet ports** (port 1 as 201). This project, like cms-nbi-client, uses plain port numbers. Which one your CMS wants is unknown; `cms_check` prints the port IDs of real services.
 - The SMx parameter names (taken from the IDI docs, not from SMx) and every entry in `smx_map.yml` and `profile_map.yml`, which are demo values.
 - Apache Kafka itself (only the mock cluster), Docker and Kubernetes (written, parsed, never run).
 
 ## Before this touches a real network
 
 - **Run `python -m app.tools.cms_check` first.** See HANDOFF.md for the first three things to do.
-- **Encryption.** CMS traffic is plain HTTP (library limit) and Kafka is plaintext with no credentials.
+- **Encryption.** Set `CMS_SCHEME=https` (and the HTTPS port) if your CMS offers it: with the default `http` the CMS login crosses the network unencrypted. Kafka is plaintext with no credentials.
+- **Paging and HTTPS have only met the mock.** If `cms_check` lists fewer ONTs than CMS holds, or HTTPS fails against a real CMS, start there.
 - **API keys** are shared secrets in an environment variable. Browsers' EventSource cannot send them, so a browser following a job's SSE stream needs a proxy that adds the key.
 - **Job history** is rebuilt from the updates topic on start, so it is bounded by that topic's retention.
 - **Dead letters** are parked with their error; there is no tool yet to list or replay them.

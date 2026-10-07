@@ -1,6 +1,6 @@
 # Handoff: gpon-cms, a provisioning API for legacy Calix GPON (CMS)
 
-**What this is.** What the SMx API is for XGS, this is for CMS R15.x (SOAP over HTTP, port 18080). It provisions an ONT piece by piece (the ONT, each Ethernet port, each service, on a plain port or on the built-in router of an 844G), runs the rest of the lifecycle as repeat-safe jobs (enable/disable ports and services, change or delete a service, delete an ONT), and exports a PON, card or network for a GPON-to-XGS cutover in SMx's terms, with a dry-run plan of the SMx requests. It only ever talks to CMS: nothing here writes to SMx or Sonar. **Voice is out of scope**: only Ethernet data services are read, so the export and the SMx plan mark every ONT with voice ports `voice: not checked`, and `unknown` where the count could not be read. Those need checking by hand. The `XGS_CUTOVER` event's migration request has no voice flag yet. Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+**What this is.** What the SMx API is for XGS, this is for CMS R15.x (SOAP over HTTP or HTTPS). It provisions an ONT piece by piece (the ONT, each Ethernet port, each service, on a plain port or on the built-in router of an 844G), runs the rest of the lifecycle as repeat-safe jobs (enable/disable ports and services, change or delete a service, delete an ONT), and exports a PON, card or network for a GPON-to-XGS cutover in SMx's terms, with a dry-run plan of the SMx requests. It only ever talks to CMS: nothing here writes to SMx or Sonar. **Voice is out of scope**: only Ethernet data services are read, so the export and the SMx plan mark every ONT with voice ports `voice: not checked`, and `unknown` where the count could not be read. Those need checking by hand. The `XGS_CUTOVER` event's migration request has no voice flag yet. Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Five minutes against the mock
 
@@ -27,7 +27,7 @@ In the export, ONTs 3, 4, 7 and others are 844Gs whose ports all run as bridges:
 
 ## What is proven (against the mock, by the test suite on Python 3.10 and 3.12)
 
-- Every CMS operation through **cms-nbi-client 0.1.0** over real SOAP to the mock NBI server, including two library bugs found and worked around: its Ethernet-port update always raises `KeyError`, and its service update silently drops bandwidth-profile and tag-action changes.
+- Every CMS operation through the project's own CMS client (`app/nbi/client.py`) over real SOAP to the mock NBI server. Each sends the same requests the cms-nbi-client library sent, recorded before the library was removed: a test compares them. HTTPS is tested with a private CA (the certificate is checked by default), and so is paging, against the mock's.
 - Every change is repeat-safe (each test runs it twice). A failed provisioning deletes the ONT it created.
 - The queue's delivery rules over the Kafka wire protocol (librdkafka's mock cluster), including a worker killed mid-job.
 - The read-only check sends no write (a guard refuses one) and blanks the password in its dumps. API keys are enforced on every `/api/v2` route. The old `/api/v1` SSH routes are gone, and CORS allows no origin unless `CORS_ALLOW_ORIGINS` lists it.
@@ -35,7 +35,7 @@ In the export, ONTs 3, 4, 7 and others are 844Gs whose ports all run as bridges:
 
 ## What is not proven
 
-- **Nothing has touched a real CMS, SMx, Sonar or Kafka broker.** Request shapes come from the library; any reply field it does not parse is inferred (list in ARCHITECTURE.md).
+- **Nothing has touched a real CMS, SMx or Sonar.** Request shapes come from cms-nbi-client; any reply field it did not parse is inferred (list in ARCHITECTURE.md). HTTPS and paging have only met the mock server.
 - **The router side of the 844G is not known**: how router-side services and ports are addressed, and how CMS shows whether each Ethernet port is in bridge or router mode. All of it sits behind `app/nbi/router_side.py` and is off until configured: router writes are refused, modes read as `unknown`, and the SMx plan fails rather than default anything. The NOC's lesson: 844Gs that ran as bridges were rebuilt as router/ONT combos, and customers ended up with double NAT.
 - **Whether customers keep their ONT through a cutover is not settled.** Both are supported: the export carries the existing serial, and a replacement serial can be filled in.
 - **Voice is not read at all.** The voice status comes from the profile's `pots` attribute, whose meaning as a port count is inferred (`cms_check` prints its raw values).
@@ -43,10 +43,10 @@ In the export, ONTs 3, 4, 7 and others are 844Gs whose ports all run as bridges:
 
 ## First three things to do with a real CMS
 
-1. **Run the read-only check** against an 844G running as a router, then one running as a bridge: `CMS_HOST=... CMS_USERNAME=... CMS_PASSWORD=... python -m app.tools.cms_check --network NTWK-... --ont-id <id> --dump ./replies`. Read "unrecognised reply fields", "raw values of inferred fields" and "service ONT slots seen". Use them to set the four `CMS_RG_*` settings (instructions in `router_side.py`) and to fix any inferred field. It changes nothing.
+1. **Run the read-only check** against an 844G running as a router, then one running as a bridge: `CMS_HOST=... CMS_USERNAME=... CMS_PASSWORD=... [CMS_SCHEME=https CMS_PORT=... CMS_CA_FILE=...] python -m app.tools.cms_check --network NTWK-... --ont-id <id> --dump ./replies`. Read "unrecognised reply fields", "raw values of inferred fields" and "service ONT slots seen". Use them to set the four `CMS_RG_*` settings (instructions in `router_side.py`) and to fix any inferred field. It changes nothing.
 2. **Export one PON read-only and check it against what the techs know**: `python -m app.legacy.export --network NTWK-... --pon 1/1/1`. Check serials, VLANs, profiles, and that each 844G's bridge/router mode matches the field. Keep the `.snapshot.yml`; `python -m app.legacy.snapshot --compare` shows any later drift.
 3. **Make the first write on one spare lab ONT**: a signup with a port and a service, each lifecycle change, then delete it. Compare a snapshot before and after. Only then point Sonar or the portal at it, with `API_KEYS` set.
 
-## Credits and licence
+## Credits
 
-The SOAP requests are built by [cms-nbi-client](https://github.com/somenetworking/CMS-NBI-Client) by **somenetworking**, licensed **GPL-3.0**. That licence matters if this service is ever distributed outside your organisation.
+The CMS request shapes were learned from [cms-nbi-client](https://github.com/somenetworking/CMS-NBI-Client) by **somenetworking**, which this project used until it had its own client.

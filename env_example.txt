@@ -25,9 +25,14 @@ LOG_LEVEL=INFO
 # API_KEYS=portal:change-me-0123456789,noc:change-me-9876543210
 
 # --- Real CMS and the legacy GPON layer ---
-# The CMS server, reached with cms-nbi-client over plain HTTP. Ignored when MOCK_MODE=true.
+# The CMS server. Ignored when MOCK_MODE=true.
 # CMS_HOST=cms.example.internal
+# https if your CMS offers it; http sends the CMS login unencrypted. Set CMS_PORT to match.
+# CMS_SCHEME=https
 # CMS_PORT=18080
+# HTTPS: the certificate is checked. Point CMS_CA_FILE at your CA for a private or self-signed one.
+# CMS_CA_FILE=/etc/ssl/cms-ca.pem
+# CMS_VERIFY_TLS=true
 # CMS_USERNAME=nbi
 # CMS_PASSWORD=your_password_here
 # Topic the worker reads signup and cutover events from

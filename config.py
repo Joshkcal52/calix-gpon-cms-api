@@ -4,7 +4,7 @@ Configuration settings for gpon-cms
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional, Union
 from pydantic_settings import BaseSettings
 
 
@@ -36,9 +36,15 @@ class Settings(BaseSettings):
     mock_mode: bool = False
 
     # --- CMS northbound interface (the fast lane) ---
-    # The real CMS, reached with cms-nbi-client over plain HTTP. Ignored when MOCK_MODE is on.
+    # The real CMS, reached through app/nbi/client.py. Ignored when MOCK_MODE is on.
     cms_host: Optional[str] = None
-    cms_port: int = 18080
+    # http or https. Plain HTTP sends the CMS login unencrypted: use https wherever CMS offers it.
+    cms_scheme: Literal["http", "https"] = "http"
+    cms_port: int = 18080  # the NBI port for the scheme above; ask your CMS admin for the HTTPS port
+    # HTTPS only: check the CMS server's certificate (on unless set to false), against
+    # CMS_CA_FILE if set (for a private CA or a self-signed CMS), else the system's CAs.
+    cms_verify_tls: bool = True
+    cms_ca_file: Optional[str] = None
     cms_username: str = "nbi"
     cms_password: Optional[str] = None
     # UNVERIFIED: how CMS addresses the router (RG) side of ONTs such as the 844G.
@@ -89,6 +95,12 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+
+    def cms_verify(self) -> Union[bool, str]:
+        """What the CMS client checks the server's certificate against: a CA file, the system's CAs, or nothing"""
+        if not self.cms_verify_tls:
+            return False
+        return self.cms_ca_file or True
 
     def run_embedded_worker(self) -> bool:
         if self.worker_embedded is not None:

@@ -6,8 +6,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY requirements.txt requirements-kafka.txt requirements-cms.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-kafka.txt -r requirements-cms.txt
+COPY requirements.txt requirements-kafka.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-kafka.txt
 
 COPY main.py config.py ./
 COPY app ./app

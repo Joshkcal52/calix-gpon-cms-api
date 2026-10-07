@@ -148,8 +148,7 @@ def test_the_routes_and_clis_show_voice(api, tmp_path):
 
 
 def test_the_real_client_reads_the_voice_port_count_from_the_profile(nbi_server, monkeypatch, no_voice_on_716):
-    pytest.importorskip("cmsnbiclient")
-    from app.nbi.cms_client_backend import CmsNbiClientBackend
+    from app.nbi.cms_backend import CmsBackend
 
     server, port = nbi_server
     server._fresh_state()
@@ -158,7 +157,7 @@ def test_the_real_client_reads_the_voice_port_count_from_the_profile(nbi_server,
     monkeypatch.setitem(mock_cms.MOCK_PROFILE_DETAILS, "812G-1", profile.model_copy(update={"pots_ports": None}))
 
     async def scenario():
-        backend = CmsNbiClientBackend("127.0.0.1", port, "nbi-demo", "demo-password")
+        backend = CmsBackend("127.0.0.1", port, "nbi-demo", "demo-password")
         try:
             return await export_network(NbiGateway(backend), NET, "1/1/2"), backend.observed["OntProf.pots"]
         finally:

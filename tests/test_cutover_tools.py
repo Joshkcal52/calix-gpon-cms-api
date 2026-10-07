@@ -299,19 +299,18 @@ def test_the_plan_cli_reads_a_filled_in_csv_and_sends_nothing(api, tmp_path):
 # --- Through the real client: router-side services in an export --------------------
 
 def test_router_side_services_export_only_as_far_as_they_are_known(nbi_server):
-    pytest.importorskip("cmsnbiclient")
-    from app.nbi.cms_client_backend import CmsNbiClientBackend
+    from app.nbi.cms_backend import CmsBackend
     from app.models.provisioning_model import EthernetService
 
     server, port = nbi_server
     server._fresh_state()
 
     async def scenario():
-        verified = CmsNbiClientBackend("127.0.0.1", port, "nbi-demo", "demo-password", router=MOCK_RG_ADDRESSING)
+        verified = CmsBackend("127.0.0.1", port, "nbi-demo", "demo-password", router=MOCK_RG_ADDRESSING)
         await verified.add_ethernet_service(NET, 4, EthernetService(
             vlan=300, bandwidth_profile="RES-1G", tag_action="1", attach_to="router"))
         known = await export_network(NbiGateway(verified), NET, "1/1/1")
-        unverified = CmsNbiClientBackend("127.0.0.1", port, "nbi-demo", "demo-password")
+        unverified = CmsBackend("127.0.0.1", port, "nbi-demo", "demo-password")
         unknown = await export_network(NbiGateway(unverified), NET, "1/1/1")
         await verified.close()
         await unverified.close()
@@ -345,7 +344,6 @@ def check(port, *extra, password="demo-password", env=None):
 
 
 def test_the_check_reads_and_reports_without_changing_anything(nbi_server, tmp_path):
-    pytest.importorskip("cmsnbiclient")
     server, port = nbi_server
     server._fresh_state()
 
@@ -378,7 +376,6 @@ def test_the_check_reads_and_reports_without_changing_anything(nbi_server, tmp_p
 
 
 def test_the_check_reports_reply_fields_it_does_not_recognise(nbi_server, monkeypatch):
-    pytest.importorskip("cmsnbiclient")
     server, port = nbi_server
     server._fresh_state()
     original = server._ont_xml
@@ -390,7 +387,6 @@ def test_the_check_reports_reply_fields_it_does_not_recognise(nbi_server, monkey
 
 
 def test_the_check_fails_clearly_and_still_changes_nothing(nbi_server):
-    pytest.importorskip("cmsnbiclient")
     server, port = nbi_server
     server._fresh_state()
 
@@ -405,18 +401,16 @@ def test_the_check_fails_clearly_and_still_changes_nothing(nbi_server):
 
 
 def test_the_check_guard_refuses_writes_even_if_code_tries_one(nbi_server):
-    pytest.importorskip("cmsnbiclient")
-    import requests
     from app.models.provisioning_model import Attachment, PortChange
-    from app.nbi.cms_client_backend import CmsNbiClientBackend
+    from app.nbi.cms_backend import CmsBackend
     from app.tools.cms_check import WriteBlocked, install_guard
 
     server, port = nbi_server
     server._fresh_state()
 
     async def scenario():
-        backend = CmsNbiClientBackend("127.0.0.1", port, "nbi-demo", "demo-password")
-        remove = install_guard(requests, None)
+        backend = CmsBackend("127.0.0.1", port, "nbi-demo", "demo-password")
+        remove = install_guard(backend.client, None)
         try:
             await backend.get_ont(NET, 1)  # reads pass
             with pytest.raises(WriteBlocked):
