@@ -13,7 +13,7 @@ The quickest path needs neither Docker nor Kafka: `MOCK_MODE=true python main.py
 
 ## With Docker
 
-This Compose file has not been run yet (it was written without access to Docker). The same processes were run and tested directly; see "Without Docker".
+This Compose file has been run end to end once, with Apache Kafka 3.7.1: every step below worked, including the outage and the worker restart. The same processes can also run without Docker; see "Without Docker".
 
 ```bash
 docker compose -f deploy/demo/docker-compose.yml up --build
