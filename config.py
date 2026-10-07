@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     ssh_password: Optional[str] = None
     ssh_timeout: int = 30
 
+    # API keys for every /api/v2 route, comma-separated. Each entry is a key, or name:key
+    # (the name is logged with each request). See app/auth.py.
+    api_keys: Optional[str] = None
+
     # Mock mode: simulate the E7-20 instead of opening an SSH connection.
     # For development without lab hardware. Set MOCK_MODE=true in .env
     mock_mode: bool = False
@@ -40,6 +44,11 @@ class Settings(BaseSettings):
     cms_port: int = 18080
     cms_username: str = "nbi"
     cms_password: Optional[str] = None
+    # UNVERIFIED: how CMS addresses the router (RG) side of ONTs such as the 844G.
+    # Leave empty until checked against your CMS; see app/nbi/router_side.py.
+    cms_rg_service_slot: Optional[str] = None
+    cms_rg_port_type: Optional[str] = None
+    cms_rg_port_id_element: Optional[str] = None
     nbi_timeout_seconds: float = 10.0  # per CMS call
     nbi_max_retries: int = 2  # extra attempts for reads; writes are retried by the worker
     nbi_max_concurrency: int = 8  # CMS calls in flight per process

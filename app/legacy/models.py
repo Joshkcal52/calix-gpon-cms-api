@@ -21,8 +21,8 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from app.models.provisioning_model import (
-    EthernetService, NetworkName, OntId, OntState, ProfileName, ProvisionedService,
-    SerialNumber, SubscriberId
+    EthernetPortConfig, EthernetService, NetworkName, OntId, OntState, ProfileName, ProvisionedService,
+    SerialNumber, SubscriberId, check_unique_ports
 )
 
 EventId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{8,64}$",
@@ -55,7 +55,12 @@ class GponSignupEvent(_EventBase):
     profile: ProfileName = Field(..., description="ONT profile")
     description: Optional[str] = Field(None, max_length=64)
     services: List[EthernetService] = Field(..., min_length=1, max_length=8)
+    ports: List[EthernetPortConfig] = Field(
+        default_factory=list, max_length=8,
+        description="Ethernet port settings (admin state, subscriber ID, security profile)")
     wait_for_online: bool = Field(False, description="Hold the job open until the ONT comes online")
+
+    _unique_ports = field_validator("ports")(check_unique_ports)
 
 
 class XgsCutoverEvent(_EventBase):

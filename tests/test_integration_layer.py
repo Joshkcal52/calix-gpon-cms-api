@@ -579,7 +579,7 @@ def test_activation_returns_202_and_streams_progress(api):
 
     assert [e for e, _ in events][:2] == ["status", "status"]
     steps = [d["data"]["step"] for e, d in events if e == "step"]
-    assert steps == [1, 2, 3, 4]
+    assert steps == [1, 2, 3, 4, 5]  # find, create, ports, services, verify
     assert [d["seq"] for e, d in events if e != "end"] == list(range(1, len(events)))
     assert events[-2][0] == "result" and events[-2][1]["data"]["online"] is True
 

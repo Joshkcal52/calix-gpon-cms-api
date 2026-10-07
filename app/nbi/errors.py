@@ -84,3 +84,13 @@ class NbiRejectedError(NbiError):
     """CMS answered and refused the request (bad VLAN, unknown profile, ...)"""
     code = "cms_rejected"
     http_status = 422
+
+
+class NbiNotVerifiedError(NbiError):
+    """
+    The request needs CMS behaviour that has not been confirmed against a real
+    CMS, and the operator has not configured it (see app/nbi/router_side.py).
+    Nothing was sent.
+    """
+    code = "cms_unverified"
+    http_status = 501

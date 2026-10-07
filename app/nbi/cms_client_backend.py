@@ -16,33 +16,82 @@ not: see docs/ARCHITECTURE.md). What that means here:
   - On failure it returns the raw HTTP response instead of raising. This
     module turns those into the NbiError types the rest of the app uses.
 
+  - Two of its update calls are broken, so this module sends those requests
+    itself, in the XML shape the library would have produced (_rpc() below),
+    using the library's session:
+      E7.Update.ont_geth() (Ethernet ports) raises KeyError on every call: it
+        looks up 'subscr-id' where its parameter is 'subscr_id'.
+      E7.Update.ont_ethsvc() (services) silently drops the tag action and
+        bandwidth profile: it calls pydash.get(path, obj) with the arguments
+        swapped, so nested fields always look empty and are removed.
+
 NOT VERIFIED AGAINST A REAL CMS. It is tested against the mock NBI server
 (app/nbi/mock_cms_server.py), whose replies are modelled on what the library
 parses. Anything the library does not parse is a guess: the op-stat values,
-the linked-pon element, and the rpc-error tags used to tell "not found" from
-"already exists".
+the linked-pon element, the rpc-error tags used to tell "not found" from
+"already exists", the element names in an Ethernet port (OntEthGe) reply,
+and the meaning of the OntProf values (port counts, "true"/"false").
+
+The router side (RG) of ONTs such as the 844G is not known at all. Every
+router-side request goes through app/nbi/router_side.py and is refused unless
+an operator has configured it.
+
+Every reply field this module does not recognise is recorded in
+`unrecognised` (type -> field names), which python -m app.tools.cms_check
+prints.
 """
 
 import asyncio
 import logging
 import os
+import random
 import tempfile
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from collections import defaultdict
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
 
 from app.models.provisioning_model import (
-    DiscoveredOnt, EthernetService, OntSpec, OntState, OperState, ProvisionedService
+    Attachment, DiscoveredOnt, EthernetService, OntPorts, OntProfile, OntSpec, OntState, OperState,
+    PortChange, PortState, ProvisionedService, RouterState, ServiceChange, Vlan, port_name
 )
 from app.nbi.errors import (
     NbiAuthError, NbiConflictError, NbiConnectionError, NbiError, NbiNotFoundError,
-    NbiRejectedError, NbiTimeoutError
+    NbiNotVerifiedError, NbiRejectedError, NbiTimeoutError
 )
+from app.nbi.router_side import NOT_CONFIGURED, RouterAddressing
 from app.nbi.serno import from_serno, to_serno
 
 logger = logging.getLogger(__name__)
 
-ONT_SLOT = "3"  # the library's default ONT slot for Ethernet ports
+ONT_SLOT = "3"  # Gigabit Ethernet, per the library's docstrings (4 is HPNA, 5 is Fast Ethernet)
+SOAP_NS = "http://www.w3.org/2003/05/soap-envelope"
+
+# Every reply field the code knows by name: the ones it reads, plus the ones the
+# library itself names in its requests and attr-lists. Anything else in a reply
+# is reported as unrecognised.
+KNOWN_FIELDS: Dict[str, Set[str]] = {
+    "Ont": {"type", "id", "admin", "serno", "reg-id", "subscr-id", "descr", "ontprof", "op-stat", "model",
+            "vendor", "linked-pon", "ontpwe3prof", "us-sdber-rate", "low-rx-opt-pwr-ne-thresh",
+            "high-rx-opt-pwr-ne-thresh", "battery-present", "pse-max-power-budget", "poe-class-control",
+            "crit", "maj", "min", "warn", "info", "derived-states", "prov-reg-id", "pon", "clei", "ont",
+            "curr-sw-vers", "alt-sw-vers", "curr-committed", "mfg-serno", "product-code", "curr-cust-vers",
+            "alt-cust-vers", "onu-mac", "mta-mac", "link-permit-status"},
+    "EthSvc": {"type", "id", "admin", "descr", "tag-action", "bw-prof", "out-tag", "in-tag", "mcast-prof",
+               "pon-cos", "us-cir-override", "us-pir-override", "ds-pir-override", "hot-swap",
+               "pppoe-force-discard"},
+    "OntEthGe": {"type", "id", "admin", "subscr-id", "descr", "sec", "accept-link-oam-loopbacks",
+                 "dhcp-limit-override", "disable-on-batt", "duplex", "force-dot1x", "gos", "link-oam-events",
+                 "pbit-map", "poe-class-control", "poe-power-priority", "policing", "ppte-power-control",
+                 "role", "speed"},
+    "OntProf": {"type", "id", "name", "vendor", "model", "pots", "feth", "geth", "hpnaeth", "ds1", "rfvid",
+                "hotrfvid", "eth-oam-capable", "convert-mcast-capable", "rg", "fb", "default-to-rg"},
+    "Vlan": {"type", "id", "name", "igmp-mode", "igmp-prof", "dhcp-mode", "mac-force-forw", "ip-src-verify",
+             "mac-learn", "ae-ont-discovery", "pon-tlan", "pon-hairpin", "igmp-pbit", "dhcp-svc-prof",
+             "option82-enable", "eth-opt82prof", "gpon-opt82prof", "mobility", "pppoe-prof"},
+    "DiscOnt": {"type", "id", "model", "vendor", "pon", "clei", "mfg-serno", "product-code", "reg-id",
+                "curr-sw-vers", "onu-mac"},
+}
 
 
 class _SessionExpired(Exception):
@@ -98,6 +147,33 @@ def _vlan(value: Any) -> Optional[int]:
     return int(text) if text and text.isdigit() else None
 
 
+def _number(value: Any) -> Optional[int]:
+    text = _scalar(value)
+    return int(text) if text and text.isdigit() else None
+
+
+def _flag(value: Any) -> Optional[bool]:
+    text = (_scalar(value) or "").lower()
+    return {"true": True, "false": False}.get(text)
+
+
+def _profile(obj: Dict[str, Any]) -> OntProfile:
+    """OntProf. Attribute names from the library's attr-list; reading them as counts is inferred."""
+    return OntProfile(
+        id=_dig(obj, "id", "ontprof") or "", name=_scalar(obj.get("name")), model=_scalar(obj.get("model")),
+        vendor=_scalar(obj.get("vendor")), ge_ports=_number(obj.get("geth")), fe_ports=_number(obj.get("feth")),
+        pots_ports=_number(obj.get("pots")), rg_ports=_number(obj.get("rg")),
+        default_to_rg=_flag(obj.get("default-to-rg")))
+
+
+def _ge_port(obj: Dict[str, Any], number: int) -> PortState:
+    """OntEthGe. Element names from the library's write request; that a read uses them too is inferred."""
+    return PortState(
+        port=port_name(Attachment.ETHERNET, number), attachment=Attachment.ETHERNET, number=number,
+        admin_state=_scalar(obj.get("admin")), subscriber_id=_scalar(obj.get("subscr-id")),
+        description=_scalar(obj.get("descr")), security_profile=_dig(obj, "sec", "id", "ethsecprof"))
+
+
 def _ont_state(obj: Dict[str, Any], services: Optional[List[ProvisionedService]] = None) -> OntState:
     return OntState(
         ont_id=int(_dig(obj, "id", "ont")),
@@ -112,10 +188,26 @@ def _ont_state(obj: Dict[str, Any], services: Optional[List[ProvisionedService]]
         services=services or [])
 
 
-def _service(obj: Dict[str, Any]) -> ProvisionedService:
+def _attachment(slot: Optional[str], router: Optional[RouterAddressing]) -> Attachment:
+    """
+    Slot 3 (or none given) is a Gigabit Ethernet port. A slot equal to the
+    configured router-side slot is the router. Anything else, including the
+    library's 4 (HPNA) and 5 (Fast Ethernet), is reported as unknown rather
+    than guessed.
+    """
+    if slot in (None, ONT_SLOT):
+        return Attachment.ETHERNET
+    if router is not None and slot == router.service_slot:
+        return Attachment.ROUTER
+    return Attachment.UNKNOWN
+
+
+def _service(obj: Dict[str, Any], router: Optional[RouterAddressing] = None) -> ProvisionedService:
+    slot = _dig(obj, "id", "ontslot")
     return ProvisionedService(
         service_index=int(_dig(obj, "id", "ethsvc") or 1),
         ont_port=int(_dig(obj, "id", "ontethany") or 1),
+        attachment=_attachment(slot, router), ont_slot=slot,
         vlan=_vlan(obj.get("out-tag")),
         inner_vlan=_vlan(obj.get("in-tag")),
         bandwidth_profile=_dig(obj, "bw-prof", "id", "bwprof"),
@@ -152,16 +244,22 @@ def _raise_rpc_error(text: str) -> None:
 class CmsNbiClientBackend:
     name = "cms-nbi-client"
 
-    def __init__(self, host: str, port: int, username: str, password: str, timeout: float = 10.0):
+    def __init__(self, host: str, port: int, username: str, password: str, timeout: float = 10.0,
+                 router: Optional[RouterAddressing] = None):
         try:
             import cmsnbiclient
             import requests
+            import xmltodict
         except ImportError:
             raise RuntimeError(
                 "CMS_HOST is set but cms-nbi-client is not installed. "
                 "Install requirements-cms.txt.") from None
         self._lib = cmsnbiclient
         self._requests = requests
+        self._xmltodict = xmltodict
+        self._router = router  # None: the router side is not verified, see app/nbi/router_side.py
+        self.unrecognised: Dict[str, Set[str]] = defaultdict(set)  # reply fields nobody here knows
+        self.slots_seen: Set[str] = set()  # every EthSvc ontslot value read, for cms_check
         self._host, self._port = host, str(port)
         self._username, self._password = username, password
         self._timeout = timeout
@@ -187,7 +285,7 @@ class CmsNbiClientBackend:
             return [DiscoveredOnt(
                 serial_number=from_serno(_dig(obj, "id", "discont") or "0", _scalar(obj.get("vendor")) or ""),
                 model=_scalar(obj.get("model")) or "unknown",
-                pon_port=_pon_port(obj.get("pon")) or "unknown") for obj in _objects(result, "DiscOnt")]
+                pon_port=_pon_port(obj.get("pon")) or "unknown") for obj in self._audit(result, "DiscOnt")]
         return await self._run(work)
 
     async def get_ont(self, network: str, ont_id: int) -> OntState:
@@ -215,7 +313,7 @@ class CmsNbiClientBackend:
     async def list_onts(self, network: str) -> List[OntState]:
         def work() -> List[OntState]:
             result = self._check(self._query(network).show_ont())  # the library pages through them all
-            return [_ont_state(obj) for obj in _objects(result, "Ont")]
+            return [_ont_state(obj) for obj in self._audit(result, "Ont")]
         return await self._run(work)
 
     async def create_ont(self, network: str, spec: OntSpec) -> OntState:
@@ -238,18 +336,134 @@ class CmsNbiClientBackend:
             raise NbiRejectedError(
                 f"Service on VLAN {service.vlan} has no tag_action. CMS needs a service tag action "
                 f"for every Ethernet service.")
+        attachment = Attachment(service.attach_to)
+        slot = self._slot(attachment)
 
         def work() -> None:
-            used = {s.service_index for s in self._services(network, ont_id) if s.ont_port == service.ont_port}
+            used = {s.service_index for s in self._services(network, ont_id)
+                    if (s.attachment, s.ont_port) == (attachment, service.ont_port)}
             index = next(n for n in range(1, len(used) + 2) if n not in used)
             self._check(self._lib.E7.Create(self._client, _attr(network), self._timeout).ont_ethsvc(
-                ont_id=str(ont_id), ontslot=ONT_SLOT, ontethany=str(service.ont_port), ethsvc=str(index),
+                ont_id=str(ont_id), ontslot=slot, ontethany=str(service.ont_port), ethsvc=str(index),
                 admin_state="enabled",
                 descr=escape(service.description or ""),
                 svctagaction_id=escape(service.tag_action),
                 bwprof_id=escape(service.bandwidth_profile),
                 out_tag_id=str(service.vlan)))
         await self._run(work)
+
+    async def update_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int, change: ServiceChange) -> None:
+        slot = self._slot(attachment)
+        # The XML E7.Update.ont_ethsvc() would send if it worked: it silently drops
+        # tag-action and bw-prof (pydash.get called with its arguments swapped).
+        body = (f"<type>EthSvc</type><id><ont>{ont_id}</ont><ontslot>{escape(slot)}</ontslot>"
+                f"<ontethany>{ont_port}</ontethany><ethsvc>{service_index}</ethsvc></id>")
+        if change.admin_state:
+            body += f"<admin>{escape(change.admin_state)}</admin>"
+        if change.tag_action:
+            body += (f"<tag-action><type>SvcTagAction</type><id><svctagaction>{escape(change.tag_action)}"
+                     f"</svctagaction></id></tag-action>")
+        if change.bandwidth_profile:
+            body += (f"<bw-prof><type>BwProf</type><id><bwprof>{escape(change.bandwidth_profile)}</bwprof>"
+                     f"</id></bw-prof>")
+        if change.vlan is not None:
+            body += f"<out-tag>{change.vlan}</out-tag>"
+        await self._edit(network, body)
+
+    async def delete_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int) -> None:
+        slot = self._slot(attachment)
+
+        def work() -> None:
+            self._check(self._lib.E7.Delete(self._client, _attr(network), self._timeout).ont_ethsvc(
+                ont_id=str(ont_id), ontslot=slot, ontethany=str(ont_port), ethsvc=str(service_index)))
+        await self._run(work)
+
+    async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts:
+        def work() -> OntPorts:
+            matches = self._show_ont(network, {"ont": str(ont_id)})
+            if not matches:
+                raise NbiNotFoundError(f"ONT {ont_id} does not exist on {network}.")
+            profile_id = _dig(matches[0], "ontprof", "id", "ontprof")
+            profile = self._ont_profile(network, profile_id) if profile_id else None
+            services = self._services(network, ont_id)
+
+            # Read as many Ethernet ports as the profile says it has; without a
+            # profile, read upwards until CMS says the port does not exist.
+            count = profile.ge_ports if profile and profile.ge_ports is not None else 8
+            ethernet = []
+            for number in range(1, count + 1):
+                try:
+                    result = self._check(self._query(network).ont_geth(ont_id=str(ont_id), ontethge=str(number)))
+                except NbiNotFoundError:
+                    if profile is None or profile.ge_ports is None:
+                        break
+                    raise
+                found = self._audit(result, "OntEthGe")
+                ethernet.append(_ge_port(found[0] if found else {}, number))
+
+            present = None if profile is None or profile.rg_ports is None else profile.rg_ports > 0
+            router = RouterState(present=present, default_to_rg=profile.default_to_rg if profile else None,
+                                 services=sum(1 for s in services if s.attachment == Attachment.ROUTER))
+            unknown = [s for s in services if s.attachment == Attachment.UNKNOWN]
+            if present and self._router is None:
+                router.note = "Router ports not read: " + NOT_CONFIGURED
+            elif present:
+                for number in range(1, profile.rg_ports + 1):
+                    obj = self._read_object(network, self._router_port_id(ont_id, number))
+                    router.ports.append(PortState(port=port_name(Attachment.ROUTER, number),
+                                                  attachment=Attachment.ROUTER, number=number,
+                                                  admin_state=_scalar(obj.get("admin")) if obj else None))
+            if unknown:
+                slots = sorted({s.ont_slot or "?" for s in unknown})
+                router.note = ((router.note + " ") if router.note else "") + (
+                    f"{len(unknown)} service(s) are in ONT slot(s) {', '.join(slots)}, which this code does not "
+                    f"recognise. They may be on the router side; nothing is assumed.")
+            return OntPorts(network=network, ont_id=ont_id, profile=profile_id, ethernet=ethernet, router=router)
+        return await self._run(work)
+
+    async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,
+                          change: PortChange) -> None:
+        values = change.model_dump(exclude_none=True)
+        if Attachment(attachment) == Attachment.ROUTER:
+            if set(values) - {"admin_state"}:
+                raise NbiRejectedError("Only the admin state of a router port can be changed.")
+            body = f"{self._router_port_id(ont_id, number)}<admin>{escape(values['admin_state'])}</admin>"
+        else:
+            # The XML E7.Update.ont_geth() would send, if it did not raise KeyError
+            body = (f"<type>OntEthGe</type><id><ont>{ont_id}</ont><ontslot>{ONT_SLOT}</ontslot>"
+                    f"<ontethge>{number}</ontethge></id>")
+            if "admin_state" in values:
+                body += f"<admin>{escape(values['admin_state'])}</admin>"
+            if "description" in values:
+                body += f"<descr>{escape(values['description'])}</descr>"
+            if "security_profile" in values:
+                body += (f"<sec><id><ethsecprof>{escape(values['security_profile'])}</ethsecprof></id>"
+                         f"<type>EthSecProf</type></sec>")
+            if "subscriber_id" in values:
+                body += f"<subscr-id>{escape(values['subscriber_id'])}</subscr-id>"
+
+        await self._edit(network, body)
+
+    async def _edit(self, network: str, object_body: str) -> None:
+        def work() -> None:
+            self._rpc(network, "<edit-config><target><running/></target><config><top>"
+                               f'<object operation="merge">{object_body}</object></top></config></edit-config>')
+        await self._run(work)
+
+    async def list_ont_profiles(self, network: str) -> List[OntProfile]:
+        def work() -> List[OntProfile]:
+            result = self._check(self._query(network).system_children_ontprof())
+            return [_profile(obj) for obj in self._audit(result, "OntProf")]
+        return await self._run(work)
+
+    async def list_vlans(self, network: str) -> List[Vlan]:
+        def work() -> List[Vlan]:
+            result = self._check(self._query(network).system_children_vlan())
+            return [Vlan(id=int(_dig(obj, "id", "vlan")), name=_scalar(obj.get("name")))
+                    for obj in self._audit(result, "Vlan") if (_dig(obj, "id", "vlan") or "").isdigit()]
+        return await self._run(work)
 
     async def delete_ont(self, network: str, ont_id: int) -> None:
         def work() -> None:
@@ -330,8 +544,78 @@ class CmsNbiClientBackend:
         return self._lib.E7.Query(self._client, _attr(network), self._timeout)
 
     def _show_ont(self, network: str, filters: Dict[str, str]) -> List[Dict[str, Any]]:
-        return list(_objects(self._check(self._query(network).show_ont(action_args=filters)), "Ont"))
+        return list(self._audit(self._check(self._query(network).show_ont(action_args=filters)), "Ont"))
 
     def _services(self, network: str, ont_id: int) -> List[ProvisionedService]:
         result = self._check(self._query(network).ont_children_ethsvc(ont_id=str(ont_id)))
-        return [_service(obj) for obj in _objects(result, "EthSvc")]
+        services = [_service(obj, self._router) for obj in self._audit(result, "EthSvc")]
+        self.slots_seen.update(s.ont_slot or "(none)" for s in services)
+        return services
+
+    def _ont_profile(self, network: str, profile_id: str) -> Optional[OntProfile]:
+        try:
+            result = self._check(self._query(network).ontprof(ontprof_id=escape(profile_id)))
+        except NbiNotFoundError:
+            return None
+        found = list(self._audit(result, "OntProf"))
+        return _profile(found[0]) if found else None
+
+    def _audit(self, result: Any, object_type: str) -> List[Dict[str, Any]]:
+        """The objects of one type in a result, noting any field nobody here knows"""
+        found = list(_objects(result, object_type))
+        known = KNOWN_FIELDS.get(object_type, set())
+        if self._router is not None and object_type == self._router.port_type:
+            known = {"type", "id", "admin"}
+        for obj in found:
+            self.unrecognised[object_type].update(key for key in obj if key not in known and not key.startswith("@"))
+        return found
+
+    # --- Router side and raw requests ------------------------------------------
+
+    def _slot(self, attachment: Attachment) -> str:
+        attachment = Attachment(attachment)
+        if attachment == Attachment.ETHERNET:
+            return ONT_SLOT
+        if attachment == Attachment.ROUTER:
+            if self._router is None:
+                raise NbiNotVerifiedError(NOT_CONFIGURED)
+            return self._router.service_slot
+        raise NbiRejectedError("A service in an unrecognised ONT slot cannot be addressed.")
+
+    def _router_port_id(self, ont_id: int, number: int) -> str:
+        if self._router is None:
+            raise NbiNotVerifiedError(NOT_CONFIGURED)
+        element = self._router.port_id_element
+        return f"<type>{escape(self._router.port_type)}</type><id><ont>{ont_id}</ont><{element}>{number}</{element}></id>"
+
+    def _read_object(self, network: str, object_xml: str) -> Optional[Dict[str, Any]]:
+        obj = self._rpc(network, '<get-config><source><running/></source><filter type="subtree"><top>'
+                                 f"<object>{object_xml}</object></top></filter></get-config>")
+        if obj is not None:
+            self._audit(obj, _scalar(obj.get("type")) or "")
+        return obj
+
+    def _rpc(self, network: str, body: str) -> Optional[Dict[str, Any]]:
+        """
+        Send one <rpc> the way the library does (same envelope, headers and
+        session), for requests the library cannot make. Returns the reply's
+        data/top/object, or None for a reply without one (such as <ok/>).
+        """
+        client = self._client
+        payload = (f'<soapenv:Envelope xmlns:soapenv="{SOAP_NS}"><soapenv:Body>'
+                   f'<rpc message-id="{random.getrandbits(31)}" nodename="{_attr(network)}" '
+                   f'username="{_attr(client.cms_user_nm)}" sessionid="{client.session_id}">{body}</rpc>'
+                   f"</soapenv:Body></soapenv:Envelope>")
+        response = self._requests.post(
+            url=client.cms_netconf_url, data=payload, timeout=self._timeout,
+            headers={"Content-Type": "text/xml;charset=ISO-8859-1",
+                     "User-Agent": f"CMS_NBI_CONNECT-{client.cms_user_nm}"})
+        if response.status_code != 200:
+            return self._check(response)
+        _raise_rpc_error(response.text)
+        reply = self._xmltodict.parse(response.content)
+        for key in ("soapenv:Envelope", "soapenv:Body", "rpc-reply", "data", "top", "object"):
+            if not isinstance(reply, dict) or key not in reply:
+                return None
+            reply = reply[key]
+        return reply
