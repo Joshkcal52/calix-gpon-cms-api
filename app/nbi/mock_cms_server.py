@@ -23,6 +23,10 @@ Nothing here has been compared with a real CMS.
   - The router side (RG), and each Ethernet port's bridge/router mode, use the
     deliberately fake names in app/nbi/router_side.py:MOCK_RG_ADDRESSING.
     Calix's are not known.
+  - A service without an outer VLAN is created with no <out-tag> element and
+    read back as <out-tag>none</out-tag>, like <in-tag>. That a real CMS
+    answers "none" there is inferred. Which tag actions need an outer VLAN is
+    the simulation's own rule (MOCK_TAG_ACTIONS_NO_VLAN in app/nbi/mock_cms.py).
   - Paging is off unless MOCK_CMS_PAGE_SIZE is set. Then show-ont and every
     list of children answer that many items at a time, end with <more/> while
     there are more, and start after the item named by an <after> element. The

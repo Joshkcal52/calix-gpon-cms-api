@@ -269,6 +269,9 @@ class CmsBackend:
             raise NbiRejectedError(
                 f"Service on VLAN {service.vlan} has no tag_action. CMS needs a service tag action "
                 f"for every Ethernet service.")
+        # <out-tag> only when there is a VLAN: IDI's CMS R15.x docs say to leave the outer VLAN out when the
+        # tag action does not need it. Which tag actions need one is set on CMS, not known here.
+        out_tag = element("out-tag", service.vlan) if service.vlan is not None else ""
         attachment = Attachment(service.attach_to)
         slot = self._slot(attachment)
         used = {s.service_index for s in await self._services(network, ont_id)
@@ -279,7 +282,7 @@ class CmsBackend:
             f"{element('descr', service.description or '')}"
             f"<tag-action><type>SvcTagAction</type><id>{element('svctagaction', service.tag_action)}</id>"
             f"</tag-action><bw-prof><type>BwProf</type><id>{element('bwprof', service.bandwidth_profile)}</id>"
-            f"</bw-prof>{element('out-tag', service.vlan)}" + SERVICE_DEFAULTS), get_config=True)
+            f"</bw-prof>{out_tag}" + SERVICE_DEFAULTS), get_config=True)
 
     async def update_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
                              service_index: int, change: ServiceChange) -> None:
