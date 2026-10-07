@@ -4,9 +4,9 @@
 #
 #   docker compose -f deploy/demo/docker-compose.yml up --build
 #
-# NOT YET RUN: this file was written without access to Docker. The same four
-# processes were run and tested directly (see README.md, "Without Docker").
-name: gpon-legacy-demo
+# Run end to end once with this Kafka image (see README.md). The same four
+# processes can also run without Docker (README.md, "Without Docker").
+name: gpon-cms-demo
 
 x-app: &app
   build:

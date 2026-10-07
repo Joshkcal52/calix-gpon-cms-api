@@ -1,25 +1,23 @@
-# Mock mode: set to true to simulate the E7-20 (no SSH connection is opened).
-# Use this when you have no lab hardware. Any host/username/password works.
-MOCK_MODE=false
+# Copy to .env (or set these in the environment). config.py has every setting.
 
-# SSH Connection Settings
-SSH_HOST=192.168.1.100
-SSH_USERNAME=admin
-SSH_PASSWORD=your_password_here
-SSH_PORT=22
-SSH_TIMEOUT=30
+# Mock mode: use the simulated CMS. Nothing real is touched and no API key is needed.
+MOCK_MODE=false
 
 # API Settings
 HOST=0.0.0.0
 PORT=8000
-RELOAD=true
+# Restart on code changes (development only)
+RELOAD=false
+# Browser origins allowed to call the API, comma-separated. Empty allows none.
+# CORS_ALLOW_ORIGINS=https://portal.example.internal
 
 # Logging
-LOG_LEVEL=INFO 
+LOG_LEVEL=INFO
 
-# --- v2 integration layer (see docs/ARCHITECTURE.md) ---
+# --- Queue and workers (see docs/ARCHITECTURE.md) ---
 # Leave empty to queue inside the API process. Set to use Kafka.
 # KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+# KAFKA_TOPIC_PREFIX=gpon-cms
 # Run a worker inside the API process (default: yes without Kafka, no with it)
 # WORKER_EMBEDDED=true
 # API keys for /api/v2, comma-separated, each "name:key" or a bare key (16+ characters).

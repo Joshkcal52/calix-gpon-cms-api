@@ -22,9 +22,9 @@ from app.models.job_model import Command, JobStatus, JobUpdate  # noqa: E402
 from app.nbi.errors import NbiRejectedError, NbiTimeoutError  # noqa: E402
 from app.worker.runner import Worker  # noqa: E402
 
-SETTINGS = SimpleNamespace(kafka_bootstrap_servers="kafka:9092", kafka_topic_prefix="rogue",
+SETTINGS = SimpleNamespace(kafka_bootstrap_servers="kafka:9092", kafka_topic_prefix="gpon-cms",
                            kafka_max_poll_interval_seconds=900)
-TOPIC = "rogue.commands.provisioning"
+TOPIC = "gpon-cms.commands.provisioning"
 
 
 class FakeProducer:
@@ -147,7 +147,7 @@ def test_status_updates_wait_for_the_broker_and_chatter_does_not(bus):
     asyncio.run(bus.publish_update(JobUpdate(type="result", status=JobStatus.SUCCEEDED, **base)))
 
     assert [(how, topic, key) for how, topic, _, key, _ in bus._producer.sent] == [
-        ("send", "rogue.job-updates", b"j1"), ("send_and_wait", "rogue.job-updates", b"j1")]
+        ("send", "gpon-cms.job-updates", b"j1"), ("send_and_wait", "gpon-cms.job-updates", b"j1")]
 
 
 def test_consumer_never_auto_commits_and_workers_share_a_group(bus):
@@ -160,7 +160,7 @@ def test_consumer_never_auto_commits_and_workers_share_a_group(bus):
 
     assert consumer.topics == (TOPIC,)
     assert consumer.options["enable_auto_commit"] is False
-    assert consumer.options["group_id"] == "rogue.workers.provisioning"
+    assert consumer.options["group_id"] == "gpon-cms.workers.provisioning"
     assert consumer.options["auto_offset_reset"] == "earliest"
     assert consumer.options["max_poll_interval_ms"] == 900000
 
@@ -178,7 +178,7 @@ def test_offset_is_committed_only_after_success(bus):
     # commit N+1 means "offset N is done"
     assert [a for a in consumer.actions if a[0] != "stop"] == [("commit", 1), ("commit", 2)]
     assert order == [("handled", 1), ("handled", 2)]
-    result_updates = [s for s in bus._producer.sent if s[0] == "send_and_wait" and s[1] == "rogue.job-updates"]
+    result_updates = [s for s in bus._producer.sent if s[0] == "send_and_wait" and s[1] == "gpon-cms.job-updates"]
     assert len(result_updates) == 4  # running + succeeded, per command
 
 
@@ -207,7 +207,7 @@ def test_permanent_failure_goes_to_the_dead_letter_topic_before_the_commit(bus):
 
     consumer = run_worker(bus, handler, expected_commits=1)
 
-    parked = [s for s in bus._producer.sent if s[1] == "rogue.commands.dlq"]
+    parked = [s for s in bus._producer.sent if s[1] == "gpon-cms.commands.dlq"]
     assert len(parked) == 1
     how, _, value, key, headers = parked[0]
     assert how == "send_and_wait" and key == b"NTWK-1"
@@ -229,7 +229,7 @@ def test_unreadable_message_is_parked_so_it_cannot_block_the_partition(bus):
 
     assert handled == [2]
     assert [a for a in consumer.actions if a[0] != "stop"] == [("commit", 1), ("commit", 2)]
-    parked = [s for s in bus._producer.sent if s[1] == "rogue.commands.dlq"]
+    parked = [s for s in bus._producer.sent if s[1] == "gpon-cms.commands.dlq"]
     assert parked[0][2] == b"not json" and dict(parked[0][4])["error-code"] == b"invalid_command"
 
 

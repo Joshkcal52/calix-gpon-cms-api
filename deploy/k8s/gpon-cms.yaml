@@ -6,7 +6,7 @@
 # before using it:
 #
 #   kubectl create secret generic cms-nbi-credentials --from-literal=username=... --from-literal=password=...
-#   kubectl create secret generic rogue-api-keys --from-literal=api-keys='portal:<32+ random chars>,noc:<...>'
+#   kubectl create secret generic gpon-cms-api-keys --from-literal=api-keys='portal:<32+ random chars>,noc:<...>'
 #
 # Every /api/v2 route needs one of those API keys (X-API-Key header). Without
 # API_KEYS the API answers 503 to everything under /api/v2.
@@ -14,18 +14,18 @@
 # Create the topics first (partition count = how many commands can run at once
 # per lane, so it is also the cap on parallel CMS work):
 #
-#   kafka-topics.sh --create --topic legacy-gpon-events          --partitions 6  --replication-factor 3
-#   kafka-topics.sh --create --topic rogue.commands.provisioning --partitions 6  --replication-factor 3
-#   kafka-topics.sh --create --topic rogue.commands.dlq          --partitions 1  --replication-factor 3
-#   kafka-topics.sh --create --topic rogue.job-updates           --partitions 6  --replication-factor 3 \
+#   kafka-topics.sh --create --topic legacy-gpon-events             --partitions 6  --replication-factor 3
+#   kafka-topics.sh --create --topic gpon-cms.commands.provisioning --partitions 6  --replication-factor 3
+#   kafka-topics.sh --create --topic gpon-cms.commands.dlq          --partitions 1  --replication-factor 3
+#   kafka-topics.sh --create --topic gpon-cms.job-updates           --partitions 6  --replication-factor 3 \
 #       --config retention.ms=604800000
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: rogue-api-config
+  name: gpon-cms-config
 data:
   KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
-  KAFKA_TOPIC_PREFIX: "rogue"
+  KAFKA_TOPIC_PREFIX: "gpon-cms"
   RELOAD: "false"
   MOCK_MODE: "false"
   # The CMS server, reached over plain HTTP by cms-nbi-client. The login comes
@@ -42,14 +42,14 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rogue-api
+  name: gpon-cms-api
 spec:
   replicas: 2
   selector:
-    matchLabels: {app: rogue-api}
+    matchLabels: {app: gpon-cms-api}
   template:
     metadata:
-      labels: {app: rogue-api}
+      labels: {app: gpon-cms-api}
     spec:
       containers:
         - name: api
@@ -57,10 +57,10 @@ spec:
           ports:
             - containerPort: 8000
           envFrom:
-            - configMapRef: {name: rogue-api-config}
+            - configMapRef: {name: gpon-cms-config}
           env:
             - name: API_KEYS
-              valueFrom: {secretKeyRef: {name: rogue-api-keys, key: api-keys}}
+              valueFrom: {secretKeyRef: {name: gpon-cms-api-keys, key: api-keys}}
             - name: CMS_USERNAME
               valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: username}}
             - name: CMS_PASSWORD
@@ -78,28 +78,28 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: rogue-api
+  name: gpon-cms-api
 spec:
-  selector: {app: rogue-api}
+  selector: {app: gpon-cms-api}
   ports:
     - port: 8000
       targetPort: 8000
 ---
 # Provisioning workers. Stateless: scale replicas up to the partition count of
-# rogue.commands.provisioning. Extra replicas beyond that sit idle as spares.
+# gpon-cms.commands.provisioning. Extra replicas beyond that sit idle as spares.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rogue-worker-provisioning
+  name: gpon-cms-worker-provisioning
 spec:
   replicas: 3
   selector:
-    matchLabels: {app: rogue-worker, lane: provisioning}
+    matchLabels: {app: gpon-cms-worker, lane: provisioning}
   strategy:
     rollingUpdate: {maxUnavailable: 1, maxSurge: 0}  # fewer rebalances during a rollout
   template:
     metadata:
-      labels: {app: rogue-worker, lane: provisioning}
+      labels: {app: gpon-cms-worker, lane: provisioning}
     spec:
       # On SIGTERM a worker finishes the command in hand, commits, and leaves the
       # group. This must be longer than the slowest command (activation waits up
@@ -110,7 +110,7 @@ spec:
           image: REPLACE_WITH_YOUR_IMAGE
           command: ["python", "-m", "app.worker"]
           envFrom:
-            - configMapRef: {name: rogue-api-config}
+            - configMapRef: {name: gpon-cms-config}
           env:
             - {name: WORKER_LANES, value: "provisioning"}
             - name: CMS_USERNAME
@@ -135,16 +135,16 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rogue-worker-legacy
+  name: gpon-cms-worker-legacy
 spec:
   replicas: 3
   selector:
-    matchLabels: {app: rogue-worker, lane: legacy}
+    matchLabels: {app: gpon-cms-worker, lane: legacy}
   strategy:
     rollingUpdate: {maxUnavailable: 1, maxSurge: 0}
   template:
     metadata:
-      labels: {app: rogue-worker, lane: legacy}
+      labels: {app: gpon-cms-worker, lane: legacy}
     spec:
       terminationGracePeriodSeconds: 240
       containers:
@@ -152,7 +152,7 @@ spec:
           image: REPLACE_WITH_YOUR_IMAGE
           command: ["python", "-m", "app.worker"]
           envFrom:
-            - configMapRef: {name: rogue-api-config}
+            - configMapRef: {name: gpon-cms-config}
           env:
             - {name: WORKER_LANES, value: "legacy"}
             - name: CMS_USERNAME

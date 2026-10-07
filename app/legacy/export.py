@@ -26,6 +26,12 @@ that has a router but runs every port as a bridge is flagged: those are the
 844Gs that were wrongly rebuilt as router/ONT combos (double NAT) in manual
 cutovers.
 
+VOICE IS NOT EXPORTED. Only Ethernet data services are read. So that the
+sheet never looks complete when it is not, every record has a voice status
+(the "voice" field and CSV column): "not checked" when the ONT profile has
+voice (POTS) ports, "unknown" when that count could not be read, and "none"
+only when the profile has no voice ports. Check the others by hand.
+
 The column names follow the SMx parameters as the IDI billing SMx R24.x
 integration docs name them (account number, OLT, ONT profile, ONT port,
 VLAN, c-VLAN). They are not SMx's own API field names, which are not known
@@ -40,9 +46,9 @@ import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from app.models.provisioning_model import OntState, PortState, ProvisionedService, port_name
 from app.nbi.errors import NbiError
@@ -57,6 +63,14 @@ FILL_IN_SUBSCRIBER = ("fill_in_first_name", "fill_in_last_name", "fill_in_street
 FILL_IN_ONT = ("fill_in_olt", "fill_in_pon_port", "fill_in_replacement_serial_number")
 # A replacement serial is only needed if the ONT is swapped; the rest are always needed
 OPTIONAL_FILL_IN = ("fill_in_replacement_serial_number",)
+
+# ExportRecord.voice: voice (POTS) is never read, so this says whether that matters for the ONT
+VOICE_NONE = "none"  # the profile has no voice ports
+VOICE_NOT_CHECKED = "not checked"  # the profile has voice ports; their service was not read
+VOICE_UNKNOWN = "unknown"  # the voice port count could not be read
+VOICE_VALUES = (VOICE_NONE, VOICE_NOT_CHECKED, VOICE_UNKNOWN)
+VOICE_SCOPE = ("Voice is not exported: only Ethernet data services are read from CMS. Check every ONT whose voice "
+               "is 'not checked' (it has voice ports) or 'unknown' (the count could not be read) by hand.")
 
 BRIDGE_NOTE = ("Router-capable ONT running every Ethernet port as a bridge: the customer has their own router. "
                "Keep it a bridge on XGS; do not rebuild it as a router/ONT combo (double NAT).")
@@ -91,6 +105,7 @@ class LegacyOnt(BaseModel):
     port_modes: Dict[str, str] = Field(default_factory=dict, description="Ethernet port -> bridge, router, unknown")
     router_capable_running_as_bridge: Optional[bool] = Field(
         None, description="Has a router, but every Ethernet port is a bridge. None if a mode is unknown")
+    voice_ports: Optional[int] = Field(None, description="Voice (POTS) ports on the ONT profile. None if unknown")
 
 
 class ExportOnt(BaseModel):
@@ -119,7 +134,13 @@ class ExportService(BaseModel):
     description: Optional[str] = None
 
 
+VoiceStatus = Literal["none", "not checked", "unknown"]
+
+
 class ExportRecord(BaseModel):
+    voice: VoiceStatus = Field(VOICE_UNKNOWN, description="Voice is never exported. 'none': no voice ports. "
+                                                          "'not checked': voice ports whose service was not read. "
+                                                          "'unknown': the voice port count could not be read")
     subscriber: ExportSubscriber
     ont: ExportOnt
     data_services: List[ExportService] = Field(default_factory=list)
@@ -134,7 +155,14 @@ class CutoverExport(BaseModel):
     card: Optional[str] = None
     exported_at: datetime
     to_fill_in: List[str] = Field(default_factory=lambda: list(FILL_IN_SUBSCRIBER + FILL_IN_ONT))
+    voice_scope: str = VOICE_SCOPE
     records: List[ExportRecord]
+
+    @computed_field
+    @property
+    def voice_not_checked(self) -> int:
+        """ONTs whose voice is 'not checked' or 'unknown'"""
+        return sum(1 for r in self.records if r.voice != VOICE_NONE)
 
 
 def _legacy_port(service: ProvisionedService) -> str:
@@ -156,6 +184,13 @@ def router_capable_running_as_bridge(router_present: Optional[bool], modes: Dict
     if not modes or "unknown" in modes.values() or router_present is None:
         return None if "router" not in modes.values() else False
     return all(mode == "bridge" for mode in modes.values())
+
+
+def voice_status(voice_ports: Optional[int]) -> str:
+    """'none' only when the profile is known to have no voice ports"""
+    if voice_ports is None:
+        return VOICE_UNKNOWN
+    return VOICE_NOT_CHECKED if voice_ports > 0 else VOICE_NONE
 
 
 def _service(service: ProvisionedService, modes: Dict[str, str]) -> ExportService:
@@ -186,6 +221,7 @@ async def export_ont(gateway: NbiGateway, network: str, ont_id: int, include_por
         try:
             read = await gateway.get_ont_ports(network, ont_id)
             ports = read.ethernet + read.router.ports
+            legacy.voice_ports = read.voice_ports
             legacy.router_present, legacy.router_default_to_rg = read.router.present, read.router.default_to_rg
             legacy.port_modes = {p.port: p.mode or "unknown" for p in read.ethernet}
             legacy.router_capable_running_as_bridge = router_capable_running_as_bridge(
@@ -209,6 +245,7 @@ async def export_ont(gateway: NbiGateway, network: str, ont_id: int, include_por
     if not ont.subscriber_id:
         notes.append("The ONT has no subscriber ID on CMS.")
     return ExportRecord(
+        voice=voice_status(legacy.voice_ports),
         subscriber=ExportSubscriber(account_number=ont.subscriber_id),
         ont=ExportOnt(serial_number=ont.serial_number, registration_id=ont.registration_id,
                       description=ont.description, legacy=legacy),
@@ -253,10 +290,11 @@ async def export_network(gateway: NbiGateway, network: str, pon_port: Optional[s
 # --- CSV ------------------------------------------------------------------------------
 
 SERVICE_COLUMNS = (
-    ("account_number",) + FILL_IN_SUBSCRIBER + FILL_IN_ONT + (
+    ("account_number", "voice") + FILL_IN_SUBSCRIBER + FILL_IN_ONT + (
         "serial_number", "registration_id", "ont_description", "legacy_network", "legacy_ont_id",
         "legacy_profile", "legacy_model", "legacy_pon_port", "legacy_admin_state", "legacy_router_present",
         "legacy_router_default_to_rg", "legacy_port_modes", "legacy_router_capable_running_as_bridge",
+        "legacy_voice_ports",
         "service_legacy_port", "service_attachment", "service_ont_slot", "service_port_mode", "service_index",
         "service_vlan", "service_c_vlan", "service_bandwidth_profile", "service_tag_action",
         "service_admin_state", "service_description", "notes"))
@@ -291,7 +329,7 @@ def service_rows(export: CutoverExport) -> Iterable[Dict[str, str]]:
     """One row per data service. An ONT with no services still gets one row."""
     for record in export.records:
         legacy = record.ont.legacy
-        base = {"account_number": record.subscriber.account_number,
+        base = {"account_number": record.subscriber.account_number, "voice": record.voice,
                 **{k: getattr(record.subscriber, k) for k in FILL_IN_SUBSCRIBER},
                 **{k: getattr(record.ont, k) for k in FILL_IN_ONT},
                 "serial_number": record.ont.serial_number, "registration_id": record.ont.registration_id,
@@ -302,6 +340,7 @@ def service_rows(export: CutoverExport) -> Iterable[Dict[str, str]]:
                 "legacy_router_default_to_rg": legacy.router_default_to_rg,
                 "legacy_port_modes": _modes_cell(legacy.port_modes),
                 "legacy_router_capable_running_as_bridge": legacy.router_capable_running_as_bridge,
+                "legacy_voice_ports": legacy.voice_ports,
                 "notes": " ".join(record.notes)}
         for service in record.data_services or [None]:
             row = dict(base)
@@ -351,6 +390,16 @@ def from_services_csv(text: str) -> CutoverExport:
     def flag(row: Dict[str, str], column: str) -> Optional[bool]:
         return {"true": True, "false": False}.get((value(row, column) or "").lower())
 
+    def voice(row: Dict[str, str]) -> Tuple[Optional[int], str]:
+        """A sheet without the voice columns (or with them blanked) reads as unknown, never as none"""
+        ports = number(row, "legacy_voice_ports")
+        status = value(row, "voice") or VOICE_UNKNOWN
+        if status not in VOICE_VALUES:
+            raise ValueError(f"voice: '{status}' is not one of {', '.join(VOICE_VALUES)}")
+        if status != voice_status(ports):
+            raise ValueError(f"voice '{status}' does not match legacy_voice_ports '{'' if ports is None else ports}'")
+        return ports, status
+
     records: Dict[Tuple[str, int], ExportRecord] = {}
     network = ""
     for line, row in enumerate(reader, start=2):
@@ -358,7 +407,9 @@ def from_services_csv(text: str) -> CutoverExport:
             key = (row["legacy_network"], int(row["legacy_ont_id"]))
             if key not in records:
                 modes = _parse_modes(value(row, "legacy_port_modes"))
+                voice_ports, voice_state = voice(row)
                 records[key] = ExportRecord(
+                    voice=voice_state,
                     subscriber=ExportSubscriber(account_number=value(row, "account_number"),
                                                 **{k: value(row, k) for k in FILL_IN_SUBSCRIBER}),
                     ont=ExportOnt(serial_number=row["serial_number"], registration_id=value(row, "registration_id"),
@@ -374,7 +425,8 @@ def from_services_csv(text: str) -> CutoverExport:
                                       router_default_to_rg=flag(row, "legacy_router_default_to_rg"),
                                       port_modes=modes,
                                       router_capable_running_as_bridge=flag(
-                                          row, "legacy_router_capable_running_as_bridge"))),
+                                          row, "legacy_router_capable_running_as_bridge"),
+                                      voice_ports=voice_ports)),
                     ports=[PortState(port=p, attachment="ethernet", number=int(p[3:]), mode=m)
                            for p, m in modes.items() if p.startswith("eth") and p[3:].isdigit()])
             network = network or key[0]
@@ -443,6 +495,10 @@ async def main() -> None:
     print(f"Exported {len(export.records)} ONTs and {services} data services from {args.network} to "
           f"{directory}/{stem}.*  ({with_notes} ONT(s) have notes; {bridges} router-capable ONT(s) run as "
           f"bridges: keep them bridges)", file=sys.stderr)
+    if export.voice_not_checked:
+        print(f"Voice is NOT exported. {export.voice_not_checked} ONT(s) have voice ports, or a voice port count "
+              f"that could not be read (voice column 'not checked' or 'unknown'): check their voice service by hand.",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

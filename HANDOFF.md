@@ -1,6 +1,6 @@
-# Handoff: a provisioning API for legacy Calix GPON (CMS)
+# Handoff: gpon-cms, a provisioning API for legacy Calix GPON (CMS)
 
-**What this is.** What the SMx API is for XGS, this is for CMS R15.x (SOAP over HTTP, port 18080). It provisions an ONT piece by piece (the ONT, each Ethernet port, each service, on a plain port or on the built-in router of an 844G), runs the rest of the lifecycle as repeat-safe jobs (enable/disable ports and services, change or delete a service, delete an ONT), and exports a PON, card or network for a GPON-to-XGS cutover in SMx's terms, with a dry-run plan of the SMx requests. It only ever talks to CMS: nothing here writes to SMx or Sonar. Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+**What this is.** What the SMx API is for XGS, this is for CMS R15.x (SOAP over HTTP, port 18080). It provisions an ONT piece by piece (the ONT, each Ethernet port, each service, on a plain port or on the built-in router of an 844G), runs the rest of the lifecycle as repeat-safe jobs (enable/disable ports and services, change or delete a service, delete an ONT), and exports a PON, card or network for a GPON-to-XGS cutover in SMx's terms, with a dry-run plan of the SMx requests. It only ever talks to CMS: nothing here writes to SMx or Sonar. **Voice is out of scope**: only Ethernet data services are read, so the export and the SMx plan mark every ONT with voice ports `voice: not checked`, and `unknown` where the count could not be read. Those need checking by hand. The `XGS_CUTOVER` event's migration request has no voice flag yet. Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Five minutes against the mock
 
@@ -23,21 +23,23 @@ curl -s "$A/export?pon=1/1/1&format=csv" > pon.csv            # the cutover spre
 curl -s $A/subscribers/SUB-1003/smx-plan                       # SMx requests for one subscriber (dry run)
 ```
 
-In the export, ONTs 3, 4, 7 and others are 844Gs whose ports all run as bridges: they are flagged "keep it a bridge".
+In the export, ONTs 3, 4, 7 and others are 844Gs whose ports all run as bridges: they are flagged "keep it a bridge". Every simulated profile has voice ports, so every ONT reads `voice: not checked`.
 
-## What is proven (against the mock, by 130 tests on Python 3.10 and 3.12)
+## What is proven (against the mock, by the test suite on Python 3.10 and 3.12)
 
 - Every CMS operation through **cms-nbi-client 0.1.0** over real SOAP to the mock NBI server, including two library bugs found and worked around: its Ethernet-port update always raises `KeyError`, and its service update silently drops bandwidth-profile and tag-action changes.
 - Every change is repeat-safe (each test runs it twice). A failed provisioning deletes the ONT it created.
-- The queue's delivery rules over the Kafka wire protocol (librdkafka's mock cluster), including a worker killed mid-job.
-- The read-only check sends no write (a guard refuses one) and blanks the password in its dumps. API keys are enforced on every `/api/v2` route.
+- The queue's delivery rules over the Kafka wire protocol (librdkafka's mock cluster), including a worker killed mid-job. The demo (`deploy/demo/`) has also run end to end in Docker against a single Apache Kafka 3.7.1 broker.
+- The read-only check sends no write (a guard refuses one) and blanks the password in its dumps. API keys are enforced on every `/api/v2` route. The old `/api/v1` SSH routes are gone, and CORS allows no origin unless `CORS_ALLOW_ORIGINS` lists it.
+- Every exported ONT and planned subscriber carries its voice status, and a status that cannot be read is `unknown`, never `none`.
 
 ## What is not proven
 
-- **Nothing has touched a real CMS, SMx, Sonar or Kafka broker.** Request shapes come from the library; any reply field it does not parse is inferred (list in ARCHITECTURE.md).
+- **Nothing has touched a real CMS, SMx, Sonar or production Kafka cluster** (only one demo broker, with no replication). Request shapes come from the library; any reply field it does not parse is inferred (list in ARCHITECTURE.md).
 - **The router side of the 844G is not known**: how router-side services and ports are addressed, and how CMS shows whether each Ethernet port is in bridge or router mode. All of it sits behind `app/nbi/router_side.py` and is off until configured: router writes are refused, modes read as `unknown`, and the SMx plan fails rather than default anything. The NOC's lesson: 844Gs that ran as bridges were rebuilt as router/ONT combos, and customers ended up with double NAT.
 - **Whether customers keep their ONT through a cutover is not settled.** Both are supported: the export carries the existing serial, and a replacement serial can be filled in.
-- SMx parameter names come from the IDI billing docs, not from SMx. All mapping files hold demo values. Docker and Kubernetes files have never been run.
+- **Voice is not read at all.** The voice status comes from the profile's `pots` attribute, whose meaning as a port count is inferred (`cms_check` prints its raw values).
+- SMx parameter names come from the IDI billing docs, not from SMx. All mapping files hold demo values. The Kubernetes manifests have never been applied.
 
 ## First three things to do with a real CMS
 

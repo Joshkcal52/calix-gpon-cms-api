@@ -3,12 +3,12 @@ Kafka Bus
 The message bus on Apache Kafka (aiokafka). Used when KAFKA_BOOTSTRAP_SERVERS
 is set.
 
-Topics (prefix from KAFKA_TOPIC_PREFIX, default "rogue"):
-  rogue.commands.provisioning   ONT commands, keyed by network name
-  legacy-gpon-events            signup and cutover events (LEGACY_EVENTS_TOPIC),
-                                as plain event JSON, keyed by network name
-  rogue.commands.dlq            commands that failed for good, with the reason
-  rogue.job-updates             progress updates, keyed by job id
+Topics (prefix from KAFKA_TOPIC_PREFIX, default "gpon-cms"):
+  gpon-cms.commands.provisioning   ONT commands, keyed by network name
+  legacy-gpon-events               signup and cutover events (LEGACY_EVENTS_TOPIC),
+                                   as plain event JSON, keyed by network name
+  gpon-cms.commands.dlq            commands that failed for good, with the reason
+  gpon-cms.job-updates             progress updates, keyed by job id
 
 Delivery rules:
   - The producer waits for all in-sync replicas (acks=all) and is idempotent,

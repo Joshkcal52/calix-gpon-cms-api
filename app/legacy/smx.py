@@ -34,6 +34,11 @@ Rules:
     to_fill_in and the subscriber is marked not ready.
   - A service in an ONT slot this code does not recognise always fails the
     subscriber: it is unknown which side of the ONT it was on.
+  - Voice is not planned: only Ethernet data services are read from CMS. Each
+    plan carries the export's voice status ("not checked": the ONT has voice
+    ports; "unknown": their count could not be read; "none"), and the plan
+    counts the first two under voice_not_checked. "ready" covers data
+    services only.
 """
 
 import argparse
@@ -46,12 +51,17 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.legacy.export import (
-    BRIDGE_NOTE, FILL_IN_ONT, FILL_IN_SUBSCRIBER, OPTIONAL_FILL_IN, CutoverExport, ExportRecord, load_export
+    BRIDGE_NOTE, FILL_IN_ONT, FILL_IN_SUBSCRIBER, OPTIONAL_FILL_IN, VOICE_NONE, CutoverExport, ExportRecord,
+    VoiceStatus, load_export
 )
 
 NOT_SENT = ("Dry run. Nothing was sent to SMx. Parameter names follow the IDI billing SMx R24.x docs, "
             "not SMx's own API, whose request format is not known here. 'PON Port', 'Port Modes' and "
             "'Port Mode' are not in those docs: they carry what SMx must be told, under names chosen here.")
+
+
+VOICE_NOT_PLANNED = ("Voice is not planned: only Ethernet data services are read from CMS. Check every subscriber "
+                     "whose voice is 'not checked' (the ONT has voice ports) or 'unknown' by hand.")
 
 
 class TagActionRule(BaseModel):
@@ -108,7 +118,9 @@ class SubscriberPlan(BaseModel):
     legacy_ont_id: int
     legacy_serial_number: str
     ok: bool = Field(..., description="False if a value had no mapping; then there are no requests")
-    ready: bool = Field(..., description="ok and nothing left to fill in")
+    ready: bool = Field(..., description="ok and nothing left to fill in. Covers data services only, never voice")
+    voice: VoiceStatus = Field(..., description="Voice is not planned. 'none': no voice ports. 'not checked': voice ports "
+                                        "whose service was not read. 'unknown': voice port count not read")
     ont: Literal["kept", "replaced"] = Field(
         ..., description="kept: the existing serial number is used. replaced: fill_in_replacement_serial_number")
     problems: List[str] = Field(default_factory=list)
@@ -125,6 +137,8 @@ class SmxPlan(BaseModel):
     ok: int
     ready: int
     failed: int
+    voice_note: str = VOICE_NOT_PLANNED
+    voice_not_checked: int = Field(..., description="Subscribers whose voice is 'not checked' or 'unknown'")
     plans: List[SubscriberPlan]
 
 
@@ -227,7 +241,7 @@ def plan_subscriber(record: ExportRecord, mapping: SmxMap) -> SubscriberPlan:
     subscriber, ont = record.subscriber, record.ont
     disposition = "replaced" if ont.fill_in_replacement_serial_number else "kept"
     base = dict(account_number=account, legacy_network=legacy.network, legacy_ont_id=legacy.ont_id,
-                legacy_serial_number=legacy.serial_number, ont=disposition, warnings=warnings)
+                legacy_serial_number=legacy.serial_number, ont=disposition, voice=record.voice, warnings=warnings)
     if problems:
         return SubscriberPlan(**base, ok=False, ready=False, problems=problems)
 
@@ -264,7 +278,8 @@ def plan_export(export: CutoverExport, mapping: SmxMap, subscriber_id: Optional[
             raise LookupError(f"Subscriber {subscriber_id} is not in this export.")
     plans = [plan_subscriber(r, mapping) for r in records]
     return SmxPlan(network=export.network, subscribers=len(plans), ok=sum(p.ok for p in plans),
-                   ready=sum(p.ready for p in plans), failed=sum(not p.ok for p in plans), plans=plans)
+                   ready=sum(p.ready for p in plans), failed=sum(not p.ok for p in plans),
+                   voice_not_checked=sum(p.voice != VOICE_NONE for p in plans), plans=plans)
 
 
 def main() -> None:
@@ -289,6 +304,9 @@ def main() -> None:
         Path(args.output).write_text(text, encoding="utf-8")
     print(f"{plan.subscribers} subscriber(s): {plan.ready} ready, {plan.ok - plan.ready} need fields filled in, "
           f"{plan.failed} failed. Nothing was sent.", file=sys.stderr)
+    if plan.voice_not_checked:
+        print(f"Voice is NOT planned. {plan.voice_not_checked} subscriber(s) have voice ports, or a voice port count "
+              f"that could not be read: check their voice service by hand.", file=sys.stderr)
     sys.exit(1 if plan.failed else 0)
 
 
