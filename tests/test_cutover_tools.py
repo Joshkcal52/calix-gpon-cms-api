@@ -217,6 +217,15 @@ def test_port_modes_are_carried_exactly_and_never_defaulted(api):
     assert plan.requests[2].parameters["Port Mode"] == "ROUTER" and plan.warnings == [
         "CMS has no registration ID for this ONT; SMx asks for one."]
 
+    # Router-side service but every port a bridge: contradictory, so not flagged as a bridge
+    finish(api, api.post(f"{BASE}/signups", json={
+        "subscriber_id": "SUB-4002", "serial_number": "CXNK00D5E402", "profile": "844G-1",
+        "services": [{"vlan": 100, "bandwidth_profile": "RES-1G", "tag_action": "1", "attach_to": "router"}]}))
+    odd = next(r for r in CutoverExport.model_validate(api.get(f"{BASE}/export").json()).records
+               if r.subscriber.account_number == "SUB-4002")
+    assert odd.ont.legacy.router_capable_running_as_bridge is None
+    assert any("Check this ONT" in n for n in odd.notes)
+
     record.ont.legacy.port_modes["eth4"] = "unknown"
     (failed,) = plan_export(export, mapping(), "SUB-4001").plans
     assert failed.problems == ["port eth4: its bridge/router mode could not be read from CMS; it is not defaulted"]

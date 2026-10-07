@@ -143,9 +143,16 @@ def _legacy_port(service: ProvisionedService) -> str:
     return port_name(service.attachment, service.ont_port)
 
 
-def router_capable_running_as_bridge(router_present: Optional[bool], modes: Dict[str, str]) -> Optional[bool]:
+def router_capable_running_as_bridge(router_present: Optional[bool], modes: Dict[str, str],
+                                     router_services: int = 0) -> Optional[bool]:
+    """
+    True when the ONT has a router but every Ethernet port reads as a bridge and
+    nothing is attached to the router side. None when that cannot be told.
+    """
     if router_present is False:
         return False
+    if router_services and "router" not in modes.values():
+        return None  # services on the router, yet no port behind it: contradictory, so not flagged either way
     if not modes or "unknown" in modes.values() or router_present is None:
         return None if "router" not in modes.values() else False
     return all(mode == "bridge" for mode in modes.values())
@@ -182,9 +189,13 @@ async def export_ont(gateway: NbiGateway, network: str, ont_id: int, include_por
             legacy.router_present, legacy.router_default_to_rg = read.router.present, read.router.default_to_rg
             legacy.port_modes = {p.port: p.mode or "unknown" for p in read.ethernet}
             legacy.router_capable_running_as_bridge = router_capable_running_as_bridge(
-                legacy.router_present, legacy.port_modes)
+                legacy.router_present, legacy.port_modes, read.router.services)
             if legacy.router_capable_running_as_bridge:
                 notes.append(BRIDGE_NOTE)
+            elif read.router.services and "router" not in legacy.port_modes.values() and legacy.port_modes \
+                    and "unknown" not in legacy.port_modes.values():
+                notes.append("Services are attached to the router side, but every Ethernet port reads as a "
+                             "bridge. Check this ONT before the cutover.")
             unknown_modes = [port for port, mode in legacy.port_modes.items() if mode == "unknown"]
             if unknown_modes:
                 notes.append(f"Bridge/router mode could not be read for {', '.join(unknown_modes)}.")

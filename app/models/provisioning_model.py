@@ -3,7 +3,7 @@ Provisioning Models
 Pydantic models for ONT provisioning through the CMS northbound interface.
 
 Every value that ends up in a CMS request is validated here first, so
-nothing unchecked reaches the NBI client or a playbook.
+nothing unchecked reaches the NBI client.
 """
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
