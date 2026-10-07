@@ -1,6 +1,12 @@
-# Rogue ONT Detection API
+# GPON Provisioning API for Calix CMS
 
-A FastAPI application for detecting rogue ONTs on Calix E7-20 GPON systems.
+A REST and Kafka front end for legacy Calix GPON: what the SMx API is for XGS, this is for CMS. A billing system such as Sonar calls it (or publishes an event) when a customer signs up, and the configuration is pushed to the legacy ONT through the CMS northbound interface, with no screen-scraping.
+
+It configures each ONT piece by piece (the ONT, each Ethernet port, each service, on a plain port or on the built-in router of ONTs such as the 844G), runs the rest of the lifecycle as repeat-safe jobs, exports a network for a GPON-to-XGS cutover in SMx's terms, plans the SMx requests as a dry run, compares saved snapshots with CMS, and has a read-only check for a real CMS.
+
+**Start with [HANDOFF.md](HANDOFF.md)**: what this is, a five-minute tour, what is proven and what is not. The design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); a multi-process demo is in [deploy/demo/README.md](deploy/demo/README.md).
+
+The repository is named `rogue-api` after its first feature, rogue ONT detection over SSH. That lives on in `/api/v1` and is described further down.
 
 ## 🚀 Quick Start
 
@@ -67,15 +73,30 @@ rogue-api/
 │   │   ├── ssh_controller.py    # SSH connection service (real or mock)
 │   │   ├── mock_e7.py           # Simulated E7-20 used by MOCK_MODE
 │   │   ├── ont_controller.py    # ONT data service
-│   │   └── hp_controller.py     # HP switch service
+│   │   ├── hp_controller.py     # HP switch service
+│   │   ├── provisioning_controller.py  # v2: ONT activation workflow (ONT, ports, services)
+│   │   ├── lifecycle_controller.py     # v2: changes to existing ONTs, ports and services
+│   │   └── job_controller.py    # v2: job status and event log
+│   ├── nbi/                      # v2: CMS gateway, cms-nbi-client backend, mock CMS, mock NBI server,
+│   │                             #     router_side.py (the unverified router-side addressing)
+│   ├── legacy/                   # v2: signup and cutover events, export, SMx plan, snapshots and compare
+│   ├── tools/cms_check.py        # v2: read-only check against a real CMS
+│   ├── messaging/                # v2: command queue (in-memory or Kafka)
+│   ├── worker/                   # v2: background worker (python -m app.worker)
 │   └── utils/                    # Utility functions
 │       └── helpers.py           # Helper functions
+├── deploy/                      # Dockerfile, demo (Compose), local Kafka, Kubernetes manifests
+├── docs/ARCHITECTURE.md         # v2 design
 ├── tests/                       # Pytest tests
 ├── main.py                      # FastAPI application entry point
 ├── config.py                    # Configuration settings
 ├── conftest.py                  # Pytest fixtures
 ├── requirements.txt             # Python dependencies
+├── requirements-kafka.txt       # Extra: Kafka queue
+├── requirements-cms.txt         # Extra: real CMS via cms-nbi-client
+├── requirements-test.txt        # Everything the full test suite uses
 ├── env_example.txt              # Environment variables template
+├── HANDOFF.md                   # Start here
 ├── README.md                    # This file
 ├── notes.md                     # Project notes
 └── venv/                        # Virtual environment
@@ -102,6 +123,12 @@ Supported commands: the ones the controllers send (`show version`, `show interfa
 
 The mock output is an approximation and has not been compared with a real E7-20. Capture real CLI output and update `mock_e7.py` before trusting a parser against live equipment.
 
+## 🧩 v2: CMS provisioning, lifecycle and cutover
+
+The `/api/v2` routes provision and change ONTs through the Calix CMS northbound interface, queue changes for background workers, stream progress live, export networks for XGS cutovers and plan the SMx side as a dry run. Every `/api/v2` route needs an API key (`API_KEYS`); with `MOCK_MODE=true` and no keys set they are open. The design, delivery rules and what is not yet verified are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); [HANDOFF.md](HANDOFF.md) has a five-minute tour.
+
+For a real CMS, set `CMS_HOST`, `CMS_USERNAME` and `CMS_PASSWORD`, install `requirements-cms.txt`, and run `python -m app.tools.cms_check --network <name>` first. This has only been run against the mock CMS server in this repository, never a real CMS.
+
 ## 📚 API Endpoints
 
 ### SSH Management (`/api/v1/ssh`)
@@ -121,6 +148,42 @@ The mock output is an approximation and has not been compared with a real E7-20.
 - `POST /analyze-rogue` - Analyze ONTs for rogue behavior
 - `GET /summary` - Get ONT summary statistics
 - `GET /search` - Search and filter ONTs
+
+### Provisioning (`/api/v2`)
+
+- `GET /nbi/health` - CMS backend and circuit breaker state
+- `GET /networks/{network}/onts/discovered` - ONTs not provisioned yet
+- `GET /networks/{network}/onts/{ont_id}` - State of one ONT
+- `POST /networks/{network}/onts/status-check` - Read up to 200 ONTs in parallel
+- `POST /networks/{network}/activations` - Activate an ONT with its ports and services (202, runs as a job)
+
+### ONT lifecycle (`/api/v2/networks/{network}`)
+
+Ports are `eth1`..`eth8`, or `rg1` for the router side. Changes answer 202 and run as repeat-safe jobs.
+
+- `GET /ont-profiles`, `GET /vlans` - What exists on the network
+- `GET /onts/{ont_id}/ports` - Ethernet ports (with bridge/router mode) and the router side
+- `POST /onts/{ont_id}/ports/{port}/enable` and `/disable`; `PATCH /onts/{ont_id}/ports/{port}`
+- `POST /onts/{ont_id}/ports/{port}/services/{n}/enable` and `/disable`; `PATCH` and `DELETE` on the same path
+- `DELETE /onts/{ont_id}?serial_number=...&force=false` - Delete an ONT
+
+### XGS cutover, read-only (`/api/v2`)
+
+- `GET /networks/{network}/export?pon=|card=&format=json|csv|snapshot` - The network in SMx terms
+- `POST /networks/{network}/snapshot-compare` - What differs between a saved snapshot and CMS now
+- `POST /smx/plans` - SMx requests for an export (dry run, nothing sent)
+- `GET /networks/{network}/subscribers/{id}/smx-plan` - The same for one subscriber, read live
+
+### Legacy GPON subscribers (`/api/v2/networks/{network}`)
+
+- `POST /signups` - New subscriber: provision their ONT and services on CMS (202, runs as a job)
+- `POST /cutovers` - Hand a subscriber over to XGS: read CMS, publish a migration request (202, runs as a job)
+
+### Jobs (`/api/v2/jobs`)
+
+- `GET /` - Recent jobs
+- `GET /{job_id}` - Job status, result or error
+- `GET /{job_id}/events` - Live progress (Server-Sent Events)
 
 ### System Endpoints
 
@@ -159,9 +222,10 @@ The mock output is an approximation and has not been compared with a real E7-20.
 
 ## 🧪 Testing
 
-Run tests with pytest:
+Run the full suite (it was run on Python 3.10 and 3.12):
 
 ```bash
+pip install -r requirements-test.txt
 pytest
 ```
 
@@ -199,4 +263,4 @@ Check the console output for detailed logs. The application uses Python's loggin
 2. **Add Authentication**: Implement user authentication and authorization
 3. **Database Integration**: Add persistent storage for historical data
 4. **Real-time Monitoring**: Implement WebSocket connections for real-time updates
-5. **Export Functionality**: Add data export for SMx integration
+5. **SMx client**: the export and the SMx plan exist; sending to SMx is the dev team's (see HANDOFF.md)
