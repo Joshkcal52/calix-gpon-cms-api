@@ -39,6 +39,7 @@ def build_legacy_handlers(settings: Any, gateway: NbiGateway, bus: MessageBus) -
         request = ActivationRequest(
             serial_number=event.serial_number, ont_id=event.ont_id, profile=event.profile,
             description=event.description, subscriber_id=event.subscriber_id, services=event.services,
+            ports=event.ports,
             require_discovery=False,  # a signup can arrive before the ONT is installed
             wait_for_online=event.wait_for_online)
         result = await activate_ont(

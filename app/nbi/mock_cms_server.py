@@ -1,7 +1,7 @@
 """
 Mock CMS NBI Server
 A stand-in for the Calix CMS northbound interface that speaks SOAP over HTTP,
-so the real client path (cms-nbi-client, or Ansible's uri module) can be
+so the real client path (cms-nbi-client) can be
 exercised without a CMS.
 
     uvicorn app.nbi.mock_cms_server:app --port 18080
@@ -14,8 +14,18 @@ reply that cms-nbi-client 0.1.0 reads, is taken from that library's source.
 Fields the library never looks at (op-stat, linked-pon, model, the error
 tags) are educated guesses. Nothing here has been compared with a real CMS.
 
+  - OntEthGe (Ethernet port) replies reuse the element names of the library's
+    write request (admin, subscr-id, descr, sec/EthSecProf). That a read
+    answers with the same names is inferred.
+  - OntProf and Vlan replies use the attribute names the library asks for in
+    its attr-list. Their values (port counts, "true"/"false") are inferred.
+  - The router side (RG), and each Ethernet port's bridge/router mode, use the
+    deliberately fake names in app/nbi/router_side.py:MOCK_RG_ADDRESSING.
+    Calix's are not known.
+
 Helper endpoints for demos and tests (not part of CMS):
     GET  /mock/state                  every ONT, as JSON
+    GET  /mock/requests               what each NBI request was (auth, get, action, edit), in order
     POST /mock/damage?pon=1/1/1       simulate a bad change on one PON (pon=all for every PON)
     POST /mock/outage?mode=timeout    timeout | refused | none
     POST /mock/reset                  back to the starting data
@@ -30,11 +40,14 @@ from xml.sax.saxutils import escape, quoteattr
 
 from fastapi import FastAPI, Request, Response
 
-from app.models.provisioning_model import DiscoveredOnt, OntSpec, OntState, OperState, ProvisionedService
+from app.models.provisioning_model import (
+    Attachment, DiscoveredOnt, OntProfile, OntSpec, OntState, OperState, PortChange, PortState, ProvisionedService
+)
 from app.nbi.errors import (
     NbiConflictError, NbiConnectionError, NbiError, NbiNotFoundError, NbiRejectedError
 )
 from app.nbi.mock_cms import MockCmsBackend
+from app.nbi.router_side import MOCK_RG_ADDRESSING as RG
 from app.nbi.serno import DEFAULT_VENDOR as VENDOR, from_serno, to_serno
 
 logger = logging.getLogger(__name__)
@@ -52,6 +65,7 @@ def _fresh_state() -> None:
         ranging_seconds=float(os.getenv("MOCK_CMS_RANGING_SECONDS", "1.5")),
         extra_onts=int(os.getenv("MOCK_CMS_EXTRA_ONTS", "0")))
     app.state.sessions = set()
+    app.state.requests = []  # one entry per NBI request: what kind it was, for tests and the read-only check
 
 
 _fresh_state()
@@ -137,9 +151,51 @@ def _ont_xml(ont: OntState) -> str:
         f"{_pon_xml('linked-pon', ont.pon_port)}")
 
 
+def _slot(attachment: Attachment) -> str:
+    return RG.service_slot if attachment == Attachment.ROUTER else ONT_SLOT
+
+
+def _attachment(slot: str) -> Attachment:
+    if slot in ("", ONT_SLOT):
+        return Attachment.ETHERNET
+    if slot == RG.service_slot:
+        return Attachment.ROUTER
+    raise RpcError("invalid-value", f"The mock CMS has no ONT slot '{slot}'.")
+
+
+def _optional(tag: str, value: Optional[str]) -> str:
+    return f"<{tag}>{escape(value or '')}</{tag}>"
+
+
+def _port_xml(ont_id: int, port: PortState) -> str:
+    if port.attachment == Attachment.ROUTER:
+        return (f"<type>{RG.port_type}</type><id><ont>{ont_id}</ont>"
+                f"<{RG.port_id_element}>{port.number}</{RG.port_id_element}></id>"
+                f"<admin>{escape(port.admin_state or '')}</admin>")
+    security = (f"<sec><type>EthSecProf</type><id><ethsecprof>{escape(port.security_profile)}</ethsecprof></id></sec>"
+                if port.security_profile else "")
+    binding = "rg1" if port.mode == "router" else "none"  # fake element and values, see router_side.py
+    return (f"<type>OntEthGe</type><id><ont>{ont_id}</ont><ontslot>{ONT_SLOT}</ontslot>"
+            f"<ontethge>{port.number}</ontethge></id><admin>{escape(port.admin_state or '')}</admin>"
+            f"{_optional('subscr-id', port.subscriber_id)}{_optional('descr', port.description)}{security}"
+            f"<{RG.port_mode_element}>{binding}</{RG.port_mode_element}>")
+
+
+def _profile_xml(profile: OntProfile) -> str:
+    def number(value: Optional[int]) -> str:
+        return "" if value is None else str(value)
+    return (f'<type>OntProf</type><id><ontprof name="{escape(profile.name or "")}">{escape(profile.id)}</ontprof></id>'
+            f"<name>{escape(profile.name or '')}</name><vendor>{escape(profile.vendor or '')}</vendor>"
+            f"<model>{escape(profile.model or '')}</model><pots>{number(profile.pots_ports)}</pots>"
+            f"<feth>{number(profile.fe_ports)}</feth><geth>{number(profile.ge_ports)}</geth><hpnaeth>0</hpnaeth>"
+            f"<ds1>0</ds1><rfvid>0</rfvid><hotrfvid>0</hotrfvid><eth-oam-capable>false</eth-oam-capable>"
+            f"<convert-mcast-capable>false</convert-mcast-capable><rg>{number(profile.rg_ports)}</rg><fb>0</fb>"
+            f"<default-to-rg>{'true' if profile.default_to_rg else 'false'}</default-to-rg>")
+
+
 def _service_xml(ont_id: int, service: ProvisionedService) -> str:
     return (
-        f"<type>EthSvc</type><id><ont>{ont_id}</ont><ontslot>{ONT_SLOT}</ontslot>"
+        f"<type>EthSvc</type><id><ont>{ont_id}</ont><ontslot>{_slot(service.attachment)}</ontslot>"
         f"<ontethany>{service.ont_port}</ontethany>"
         f'<ethsvc name="Data{service.service_index}">{service.service_index}</ethsvc></id>'
         f"<admin>{escape(service.admin_state)}</admin><descr>{escape(service.description or '')}</descr>"
@@ -175,6 +231,7 @@ async def netconf(request: Request) -> Response:
         return Response(content=f"Malformed XML: {e}", status_code=400, media_type="text/plain")
 
     auth, rpc = root.find("./Body/auth"), root.find("./Body/rpc")
+    app.state.requests.append(_describe(auth, rpc))
     if auth is not None:
         return _handle_auth(auth)
     if rpc is None:
@@ -204,6 +261,22 @@ async def netconf(request: Request) -> Response:
     except NbiError as e:
         return _rpc_error("invalid-value", e.message, rpc)
     return _rpc_reply(inner, rpc)
+
+
+def _describe(auth: Optional[ElementTree.Element], rpc: Optional[ElementTree.Element]) -> Dict[str, str]:
+    """One line of the request log: e.g. {"kind": "edit", "operation": "merge", "type": "OntEthGe"}"""
+    if auth is not None:
+        return {"kind": "login" if _has(auth, "./login") else "logout"}
+    if rpc is None:
+        return {"kind": "unknown"}
+    if _has(rpc, "./action"):
+        return {"kind": "action", "type": _text(rpc, "./action/action-type")}
+    if _has(rpc, "./edit-config"):
+        target = rpc.find("./edit-config//config/top/object")
+        return {"kind": "edit", "operation": target.get("operation", "merge") if target is not None else "",
+                "type": _text(target, "./type")}
+    target = rpc.find(".//top/object")
+    return {"kind": "get", "type": _text(target, "./type"), "children": _text(target, "./children/type")}
 
 
 def _handle_auth(auth: ElementTree.Element) -> Response:
@@ -259,6 +332,34 @@ async def _handle_get(network: str, rpc: ElementTree.Element) -> str:
                 return f"<data><top><object>{_discovered_xml(ont)}</object></top></data>"
         raise RpcError("data-missing", f"Discovered ONT {serno} does not exist on {network}.")
 
+    if object_type == "System" and child_type == "OntProf":
+        children = "".join(f"<child>{_profile_xml(p)}</child>" for p in await cms.list_ont_profiles(network))
+        return f"<data><top><object><type>System</type><id/><children>{children}</children></object></top></data>"
+
+    if object_type == "System" and child_type == "Vlan":
+        children = "".join(f'<child><type>Vlan</type><id><vlan name="{escape(v.name or "")}">{v.id}</vlan></id>'
+                           f"<name>{escape(v.name or '')}</name></child>" for v in await cms.list_vlans(network))
+        return f"<data><top><object><type>System</type><id/><children>{children}</children></object></top></data>"
+
+    if object_type == "OntProf":
+        wanted = _text(target, "./id/ontprof")
+        for profile in await cms.list_ont_profiles(network):
+            if profile.id == wanted:
+                return f"<data><top><object>{_profile_xml(profile)}</object></top></data>"
+        raise RpcError("data-missing", f"ONT profile {wanted} does not exist on {network}.")
+
+    if object_type in ("OntEthGe", RG.port_type):
+        ont_id = _int(_text(target, "./id/ont"), "ONT ID")
+        ports = await cms.get_ont_ports(network, ont_id)
+        if object_type == "OntEthGe":
+            number, found = _int(_text(target, "./id/ontethge"), "Ethernet port"), ports.ethernet
+        else:
+            number, found = _int(_text(target, f"./id/{RG.port_id_element}"), "Router port"), ports.router.ports
+        port = next((p for p in found if p.number == number), None)
+        if port is None:
+            raise RpcError("data-missing", f"ONT {ont_id} has no {object_type} {number}.")
+        return f"<data><top><object>{_port_xml(ont_id, port)}</object></top></data>"
+
     if object_type == "Ont":
         ont = await cms.get_ont(network, _int(_text(target, "./id/ont"), "ONT ID"))
         if child_type == "EthSvc":
@@ -307,19 +408,41 @@ async def _handle_edit(network: str, edit: ElementTree.Element) -> str:
             ont = await cms.update_ont(network, ont_id, changes)
             return f"<data><top><object>{_ont_xml(ont)}</object></top></data>"
 
+    if object_type in ("OntEthGe", RG.port_type) and operation == "merge":
+        ont_id = _int(_text(target, "./id/ont"), "ONT ID")
+        values: Dict[str, Any] = {}
+        for field, path in (("admin_state", "./admin"), ("subscriber_id", "./subscr-id"),
+                            ("description", "./descr"), ("security_profile", "./sec/id/ethsecprof")):
+            if _has(target, path):
+                values[field] = _text(target, path) or None
+        if object_type == "OntEthGe":
+            attachment, number = Attachment.ETHERNET, _int(_text(target, "./id/ontethge"), "Ethernet port")
+        else:
+            attachment = Attachment.ROUTER
+            number = _int(_text(target, f"./id/{RG.port_id_element}"), "Router port")
+        if not any(v is not None for v in values.values()):
+            raise RpcError("missing-element", f"{object_type} merge has nothing to change.")
+        await cms.update_port(network, ont_id, attachment, number, PortChange.model_construct(**values))
+        ports = await cms.get_ont_ports(network, ont_id)
+        port = next(p for p in ports.ethernet + ports.router.ports if (p.attachment, p.number) == (attachment, number))
+        return f"<data><top><object>{_port_xml(ont_id, port)}</object></top></data>"
+
     if object_type == "EthSvc":
         ont_id = _int(_text(target, "./id/ont"), "ONT ID")
+        attachment = _attachment(_text(target, "./id/ontslot"))
         port = _int(_text(target, "./id/ontethany"), "ONT port")
         index = _int(_text(target, "./id/ethsvc"), "Service number")
         if operation == "delete":
-            await cms.delete_service(network, ont_id, port, index)
+            await cms.delete_service(network, ont_id, attachment, port, index)
             return "<ok/>"
         if operation in ("create", "merge"):
             current: Optional[ProvisionedService] = None
             if operation == "merge":
-                existing = (await cms.get_ont(network, ont_id)).services
-                current = next((s for s in existing if (s.ont_port, s.service_index) == (port, index)), None)
-            base = current.model_dump() if current else {"service_index": index, "ont_port": port}
+                current = (await cms.get_ont(network, ont_id)).service_at(attachment, port, index)
+                if current is None:
+                    raise RpcError("data-missing", f"Service {index} on ONT {ont_id} port {port} does not exist.")
+            base = current.model_dump() if current else {"service_index": index, "ont_port": port,
+                                                         "attachment": attachment}
             for field, path in (("admin_state", "./admin"), ("description", "./descr"),
                                 ("tag_action", "./tag-action/id/svctagaction"),
                                 ("bandwidth_profile", "./bw-prof/id/bwprof")):
@@ -344,6 +467,11 @@ async def _handle_edit(network: str, edit: ElementTree.Element) -> str:
 async def mock_state() -> List[Dict[str, Any]]:
     cms: MockCmsBackend = app.state.cms
     return [cms._snapshot(ont).model_dump(mode="json") for ont in cms._onts.values()]
+
+
+@app.get("/mock/requests")
+async def mock_requests() -> List[Dict[str, str]]:
+    return app.state.requests
 
 
 @app.post("/mock/damage")

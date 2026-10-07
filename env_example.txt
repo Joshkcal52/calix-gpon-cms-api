@@ -22,10 +22,9 @@ LOG_LEVEL=INFO
 # KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 # Run a worker inside the API process (default: yes without Kafka, no with it)
 # WORKER_EMBEDDED=true
-# Simulate playbook runs instead of starting Ansible (default: same as MOCK_MODE)
-# ANSIBLE_MOCK=false
-# Where playbooks reach this API
-# API_BASE_URL=http://127.0.0.1:8000
+# API keys for /api/v2, comma-separated, each "name:key" or a bare key (16+ characters).
+# Required unless MOCK_MODE=true.
+# API_KEYS=portal:change-me-0123456789,noc:change-me-9876543210
 
 # --- Real CMS and the legacy GPON layer ---
 # The CMS server, reached with cms-nbi-client over plain HTTP. Ignored when MOCK_MODE=true.

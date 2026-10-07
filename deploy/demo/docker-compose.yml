@@ -22,7 +22,13 @@ x-app-env: &app-env
   CMS_PORT: "18080"
   CMS_USERNAME: nbi-demo
   CMS_PASSWORD: demo-password
-  API_BASE_URL: http://api:8000
+  # Demo values only. Send one with every /api/v2 request: -H "X-API-Key: demo-key-0123456789abcdef"
+  API_KEYS: demo:demo-key-0123456789abcdef
+  # The mock NBI server's fake router-side names (app/nbi/router_side.py). NEVER copy these to a real CMS.
+  CMS_RG_SERVICE_SLOT: UNVERIFIED-RG
+  CMS_RG_PORT_TYPE: UnverifiedRgPort
+  CMS_RG_PORT_ID_ELEMENT: unverifiedrgport
+  CMS_RG_PORT_MODE_ELEMENT: unverified-rg-binding
   RELOAD: "false"
 
 services:
@@ -78,8 +84,7 @@ services:
     command: ["python", "-m", "app.worker"]
     environment:
       <<: *app-env
-      WORKER_LANES: legacy,provisioning,automation
-      ANSIBLE_MOCK: "false"
+      WORKER_LANES: legacy,provisioning
     depends_on:
       kafka: {condition: service_healthy}
       mock-cms: {condition: service_started}
@@ -92,18 +97,3 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       kafka: {condition: service_healthy}
-
-  # The emergency rollback playbook. Not started by "up"; run it on demand:
-  #   docker compose -f deploy/demo/docker-compose.yml run --rm rollback -e target_olt=OLT-MOCK --check
-  rollback:
-    <<: *app
-    profiles: ["tools"]
-    restart: "no"
-    entrypoint: ["/app/deploy/demo/rollback.sh"]
-    environment:
-      CMS_NBI_URL: http://mock-cms:18080/cmsexc/ex/netconf
-      CMS_NBI_USER: nbi-demo
-      CMS_NBI_PASSWORD: demo-password
-      ANSIBLE_FORCE_COLOR: "true"
-    depends_on:
-      mock-cms: {condition: service_started}

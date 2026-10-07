@@ -70,7 +70,7 @@ class JobContext:
 
     def emit_threadsafe(self, type: str, message: str, /, **data: Any) -> None:
         """
-        Same as emit(), for code that cannot await, such as ansible-runner's
+        Same as emit(), for code that cannot await, such as a
         callback in a worker thread. Events are published in the order given.
         """
         self._loop.call_soon_threadsafe(self._enqueue, type, message, data)

@@ -15,11 +15,12 @@ rules are simplified.
 
 import asyncio
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.controller.mock_e7 import MOCK_ONTS
 from app.models.provisioning_model import (
-    DiscoveredOnt, EthernetService, OntSpec, OntState, OperState, ProvisionedService
+    Attachment, DiscoveredOnt, EthernetService, OntPorts, OntProfile, OntSpec, OntState, OperState,
+    PortChange, PortState, ProvisionedService, RouterState, ServiceChange, Vlan, port_name
 )
 from app.nbi.errors import (
     NbiConflictError, NbiConnectionError, NbiNotFoundError, NbiRejectedError
@@ -27,7 +28,24 @@ from app.nbi.errors import (
 
 MOCK_NETWORK = "NTWK-MOCK-E7"
 MOCK_VLANS = {100: "data", 200: "voice", 300: "video"}
-MOCK_ONT_PROFILES = ("716GE-I", "812G-1", "844G-1")
+# Port counts are invented for the simulation. They are not Calix's figures for these models.
+MOCK_PROFILE_DETAILS = {
+    "716GE-I": OntProfile(id="716GE-I", name="716GE-I", model="716GE-I", vendor="CXNK", ge_ports=2,
+                          fe_ports=0, pots_ports=2, rg_ports=0, default_to_rg=False),
+    "812G-1": OntProfile(id="812G-1", name="812G-1", model="812G", vendor="CXNK", ge_ports=2,
+                         fe_ports=0, pots_ports=2, rg_ports=0, default_to_rg=False),
+    "844G-1": OntProfile(id="844G-1", name="844G-1", model="844G", vendor="CXNK", ge_ports=4,
+                         fe_ports=0, pots_ports=2, rg_ports=1, default_to_rg=True),
+}
+MOCK_ONT_PROFILES = tuple(MOCK_PROFILE_DETAILS)
+MOCK_SECURITY_PROFILES = {str(n) for n in range(1, 17)}
+
+
+def _new_port() -> Dict[str, Any]:
+    # A new port starts as a bridge in the simulation. That is the simulation's choice, not a
+    # statement about CMS: real code reads each port's mode and never assumes one.
+    return {"admin_state": "enabled", "subscriber_id": None, "security_profile": None, "description": None,
+            "mode": "bridge"}
 
 
 class _MockOnt:
@@ -35,6 +53,10 @@ class _MockOnt:
         self.state = state
         self.on_wire = on_wire  # is the ONT physically connected?
         self.online_at = online_at  # when ranging completes
+        profile = MOCK_PROFILE_DETAILS.get(state.profile or "")
+        ge, rg = (profile.ge_ports or 0, profile.rg_ports or 0) if profile else (0, 0)
+        self.ports: Dict[int, Dict[str, Any]] = {n: _new_port() for n in range(1, ge + 1)}
+        self.router_ports: Dict[int, Dict[str, Any]] = {n: {"admin_state": "enabled"} for n in range(1, rg + 1)}
 
 
 class MockCmsBackend:
@@ -130,20 +152,76 @@ class MockCmsBackend:
     async def add_ethernet_service(self, network: str, ont_id: int, service: EthernetService) -> None:
         await self._exchange(network)
         ont = self._require(network, ont_id)
+        attachment = Attachment(service.attach_to)
 
-        if service.vlan not in MOCK_VLANS:
-            raise NbiRejectedError(
-                f"VLAN {service.vlan} does not exist on {network}. "
-                f"Available VLANs: {', '.join(str(v) for v in MOCK_VLANS)}.")
+        self._check_vlan(network, service.vlan)
+        self._check_port(ont, attachment, service.ont_port)
+        name = port_name(attachment, service.ont_port)
         for existing in ont.state.services:
-            if (existing.vlan, existing.ont_port) == (service.vlan, service.ont_port):
-                raise NbiConflictError(
-                    f"ONT {ont_id} port {service.ont_port} already has a service on VLAN {service.vlan}.")
-        on_port = [s.service_index for s in ont.state.services if s.ont_port == service.ont_port]
+            if (existing.vlan, existing.attachment, existing.ont_port) == (service.vlan, attachment, service.ont_port):
+                raise NbiConflictError(f"ONT {ont_id} port {name} already has a service on VLAN {service.vlan}.")
+        on_port = [s.service_index for s in ont.state.services
+                   if (s.attachment, s.ont_port) == (attachment, service.ont_port)]
         ont.state.services.append(ProvisionedService(
-            service_index=max(on_port, default=0) + 1, ont_port=service.ont_port, vlan=service.vlan,
-            bandwidth_profile=service.bandwidth_profile, tag_action=service.tag_action,
+            service_index=max(on_port, default=0) + 1, ont_port=service.ont_port, attachment=attachment,
+            vlan=service.vlan, bandwidth_profile=service.bandwidth_profile, tag_action=service.tag_action,
             description=service.description))
+
+    async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts:
+        await self._exchange(network)
+        ont = self._require(network, ont_id)
+        profile = MOCK_PROFILE_DETAILS.get(ont.state.profile or "")
+        return OntPorts(
+            network=network, ont_id=ont_id, profile=ont.state.profile,
+            ethernet=[PortState(port=port_name(Attachment.ETHERNET, n), attachment=Attachment.ETHERNET, number=n,
+                                **values) for n, values in sorted(ont.ports.items())],
+            router=RouterState(
+                present=bool(profile.rg_ports) if profile else None,
+                default_to_rg=profile.default_to_rg if profile else None,
+                ports=[PortState(port=port_name(Attachment.ROUTER, n), attachment=Attachment.ROUTER, number=n,
+                                 **values) for n, values in sorted(ont.router_ports.items())],
+                services=sum(1 for s in ont.state.services if s.attachment == Attachment.ROUTER)))
+
+    async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,
+                          change: PortChange) -> None:
+        await self._exchange(network)
+        ont = self._require(network, ont_id)
+        attachment = Attachment(attachment)
+        self._check_port(ont, attachment, number)
+        values = change.model_dump(exclude_none=True)
+        if attachment == Attachment.ROUTER:
+            if set(values) - {"admin_state"}:
+                raise NbiRejectedError("Only the admin state of a router port can be changed.")
+            ont.router_ports[number].update(values)
+            return
+        if values.get("mode") == "router" and not ont.router_ports:
+            raise NbiRejectedError(f"ONT {ont_id} (profile {ont.state.profile}) has no router, so port "
+                                   f"eth{number} cannot be in router mode.")
+        if "security_profile" in values and values["security_profile"] not in MOCK_SECURITY_PROFILES:
+            raise NbiRejectedError(f"Ethernet security profile {values['security_profile']} does not exist "
+                                   f"on {network}. Available: 1 to 16.")
+        ont.ports[number].update(values)
+
+    async def update_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int, change: ServiceChange) -> None:
+        await self._exchange(network)
+        ont = self._require(network, ont_id)
+        position = self._service_position(ont, ont_port, service_index, attachment)
+        if position is None:
+            raise NbiNotFoundError(f"Service {service_index} on ONT {ont_id} port "
+                                   f"{port_name(attachment, ont_port)} does not exist.")
+        if change.vlan is not None:
+            self._check_vlan(network, change.vlan)
+        current = ont.state.services[position]
+        ont.state.services[position] = current.model_copy(update=change.model_dump(exclude_none=True))
+
+    async def list_ont_profiles(self, network: str) -> List[OntProfile]:
+        await self._exchange(network)
+        return [p.model_copy() for p in MOCK_PROFILE_DETAILS.values()]
+
+    async def list_vlans(self, network: str) -> List[Vlan]:
+        await self._exchange(network)
+        return [Vlan(id=vlan, name=name) for vlan, name in MOCK_VLANS.items()]
 
     # --- Extra operations used by the mock NBI server (app/nbi/mock_cms_server.py) ---
 
@@ -160,12 +238,12 @@ class MockCmsBackend:
         """Create a service at an explicit index, or merge new values into an existing one"""
         await self._exchange(network)
         ont = self._require(network, ont_id)
-        if service.vlan is not None and service.vlan not in MOCK_VLANS:
-            raise NbiRejectedError(
-                f"VLAN {service.vlan} does not exist on {network}. "
-                f"Available VLANs: {', '.join(str(v) for v in MOCK_VLANS)}.")
-        position = self._service_position(ont, service.ont_port, service.service_index)
-        label = f"Service {service.service_index} on ONT {ont_id} port {service.ont_port}"
+        if service.vlan is not None:
+            self._check_vlan(network, service.vlan)
+        self._check_port(ont, service.attachment, service.ont_port)
+        position = self._service_position(ont, service.ont_port, service.service_index, service.attachment)
+        label = (f"Service {service.service_index} on ONT {ont_id} port "
+                 f"{port_name(service.attachment, service.ont_port)}")
         if create:
             if position is not None:
                 raise NbiConflictError(f"{label} already exists.")
@@ -175,12 +253,14 @@ class MockCmsBackend:
                 raise NbiNotFoundError(f"{label} does not exist.")
             ont.state.services[position] = service
 
-    async def delete_service(self, network: str, ont_id: int, ont_port: int, service_index: int) -> None:
+    async def delete_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int) -> None:
         await self._exchange(network)
         ont = self._require(network, ont_id)
-        position = self._service_position(ont, ont_port, service_index)
+        position = self._service_position(ont, ont_port, service_index, attachment)
         if position is None:
-            raise NbiNotFoundError(f"Service {service_index} on ONT {ont_id} port {ont_port} does not exist.")
+            raise NbiNotFoundError(f"Service {service_index} on ONT {ont_id} port "
+                                   f"{port_name(attachment, ont_port)} does not exist.")
         del ont.state.services[position]
 
     async def list_onts(self, network: str) -> List[OntState]:
@@ -189,7 +269,7 @@ class MockCmsBackend:
 
     def damage(self, pon_port: str) -> List[str]:
         """
-        Simulate a bad change on one PON, for rollback demos: delete an ONT,
+        Simulate a bad change on one PON, for snapshot-compare demos: delete an ONT,
         disable one, repoint one at the wrong VLAN and give one a stray service.
         Returns a description of what was broken.
         """
@@ -242,11 +322,31 @@ class MockCmsBackend:
                 f"Network '{network}' is not known to CMS. The simulated CMS has one network: {MOCK_NETWORK}.")
 
     @staticmethod
-    def _service_position(ont: _MockOnt, ont_port: int, service_index: int) -> Optional[int]:
+    def _service_position(ont: _MockOnt, ont_port: int, service_index: int,
+                          attachment: Attachment = Attachment.ETHERNET) -> Optional[int]:
         for position, existing in enumerate(ont.state.services):
-            if (existing.ont_port, existing.service_index) == (ont_port, service_index):
+            if (existing.attachment, existing.ont_port, existing.service_index) == (
+                    Attachment(attachment), ont_port, service_index):
                 return position
         return None
+
+    @staticmethod
+    def _check_vlan(network: str, vlan: int) -> None:
+        if vlan not in MOCK_VLANS:
+            raise NbiRejectedError(
+                f"VLAN {vlan} does not exist on {network}. "
+                f"Available VLANs: {', '.join(str(v) for v in MOCK_VLANS)}.")
+
+    @staticmethod
+    def _check_port(ont: _MockOnt, attachment: Attachment, number: int) -> None:
+        """The simulation refuses ports the ONT's profile does not have"""
+        if Attachment(attachment) == Attachment.ROUTER:
+            if number not in ont.router_ports:
+                raise NbiRejectedError(f"ONT {ont.state.ont_id} (profile {ont.state.profile}) has no router "
+                                       f"port {number}.")
+        elif number not in ont.ports:
+            raise NbiRejectedError(f"ONT {ont.state.ont_id} (profile {ont.state.profile}) has no Ethernet "
+                                   f"port {number}.")
 
     def _require(self, network: str, ont_id: int) -> _MockOnt:
         ont = self._onts.get(ont_id)

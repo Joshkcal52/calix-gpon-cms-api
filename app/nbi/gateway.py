@@ -19,7 +19,10 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol
 
-from app.models.provisioning_model import DiscoveredOnt, EthernetService, OntSpec, OntState
+from app.models.provisioning_model import (
+    Attachment, DiscoveredOnt, EthernetService, OntPorts, OntProfile, OntSpec, OntState, PortChange,
+    ServiceChange, Vlan
+)
 from app.nbi.breaker import CircuitBreaker, OPEN
 from app.nbi.errors import NbiError, NbiNotConfiguredError, NbiTimeoutError, NbiTransportError
 
@@ -46,6 +49,21 @@ class NbiBackend(Protocol):
     async def add_ethernet_service(self, network: str, ont_id: int, service: EthernetService) -> None: ...
 
     async def delete_ont(self, network: str, ont_id: int) -> None: ...
+
+    async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts: ...
+
+    async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,
+                          change: PortChange) -> None: ...
+
+    async def update_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int, change: ServiceChange) -> None: ...
+
+    async def delete_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int) -> None: ...
+
+    async def list_ont_profiles(self, network: str) -> List[OntProfile]: ...
+
+    async def list_vlans(self, network: str) -> List[Vlan]: ...
 
     async def close(self) -> None: ...
 
@@ -98,6 +116,38 @@ class NbiGateway:
     async def delete_ont(self, network: str, ont_id: int) -> None:
         return await self._call("delete_ont",
                                 lambda: self.backend.delete_ont(network, ont_id), idempotent=False)
+
+    async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts:
+        """Ethernet ports and the router side of one ONT. Costs one CMS call per port."""
+        return await self._call("get_ont_ports", lambda: self.backend.get_ont_ports(network, ont_id),
+                                idempotent=True)
+
+    async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,
+                          change: PortChange) -> None:
+        return await self._call("update_port",
+                                lambda: self.backend.update_port(network, ont_id, attachment, number, change),
+                                idempotent=False)
+
+    async def update_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int, change: ServiceChange) -> None:
+        return await self._call(
+            "update_service",
+            lambda: self.backend.update_service(network, ont_id, attachment, ont_port, service_index, change),
+            idempotent=False)
+
+    async def delete_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int) -> None:
+        return await self._call(
+            "delete_service",
+            lambda: self.backend.delete_service(network, ont_id, attachment, ont_port, service_index),
+            idempotent=False)
+
+    async def list_ont_profiles(self, network: str) -> List[OntProfile]:
+        return await self._call("list_ont_profiles", lambda: self.backend.list_ont_profiles(network),
+                                idempotent=True)
+
+    async def list_vlans(self, network: str) -> List[Vlan]:
+        return await self._call("list_vlans", lambda: self.backend.list_vlans(network), idempotent=True)
 
     def health(self) -> Dict[str, Any]:
         return {"backend": self.backend.name, "breaker": self.breaker.snapshot()}
@@ -181,6 +231,27 @@ class NotConfiguredBackend:
     async def delete_ont(self, network: str, ont_id: int) -> None:
         raise self._refuse()
 
+    async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts:
+        raise self._refuse()
+
+    async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,
+                          change: PortChange) -> None:
+        raise self._refuse()
+
+    async def update_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int, change: ServiceChange) -> None:
+        raise self._refuse()
+
+    async def delete_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                             service_index: int) -> None:
+        raise self._refuse()
+
+    async def list_ont_profiles(self, network: str) -> List[OntProfile]:
+        raise self._refuse()
+
+    async def list_vlans(self, network: str) -> List[Vlan]:
+        raise self._refuse()
+
     async def close(self) -> None:
         return None
 
@@ -193,10 +264,11 @@ def build_gateway(settings: Any) -> NbiGateway:
         logger.warning("MOCK_MODE is on: CMS calls go to a simulated CMS, not a real one")
     elif settings.cms_host:
         from app.nbi.cms_client_backend import CmsNbiClientBackend
+        from app.nbi.router_side import router_side_addressing
         backend = CmsNbiClientBackend(
             host=settings.cms_host, port=settings.cms_port,
             username=settings.cms_username, password=settings.cms_password or "",
-            timeout=settings.nbi_timeout_seconds)
+            timeout=settings.nbi_timeout_seconds, router=router_side_addressing(settings))
         logger.info(f"CMS backend: cms-nbi-client -> http://{settings.cms_host}:{settings.cms_port}")
     else:
         backend = NotConfiguredBackend()

@@ -5,7 +5,6 @@ is set.
 
 Topics (prefix from KAFKA_TOPIC_PREFIX, default "rogue"):
   rogue.commands.provisioning   ONT commands, keyed by network name
-  rogue.commands.automation     playbook runs
   legacy-gpon-events            signup and cutover events (LEGACY_EVENTS_TOPIC),
                                 as plain event JSON, keyed by network name
   rogue.commands.dlq            commands that failed for good, with the reason

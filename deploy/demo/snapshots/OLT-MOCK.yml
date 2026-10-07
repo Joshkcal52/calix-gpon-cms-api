@@ -1,0 +1,555 @@
+format: 2
+olt: OLT-MOCK
+network: NTWK-MOCK-E7
+pon_port: null
+card: null
+captured_at: '2026-10-07T14:06:51+00:00'
+onts:
+- ont_id: 1
+  serial_number: CXNK00A3F101
+  registration_id: null
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1001
+  description: 101 Alder St
+  pon_port: 1/1/1
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 2
+  serial_number: CXNK00A3F102
+  registration_id: null
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1002
+  description: 105 Alder St
+  pon_port: 1/1/1
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 3
+  serial_number: CXNK00A3F103
+  registration_id: null
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1003
+  description: 112 Alder St
+  pon_port: 1/1/1
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth3
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth4
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+  - port: eth2
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 200
+    inner_vlan: null
+    bandwidth_profile: VOICE
+    tag_action: '2'
+    admin_state: enabled
+    description: null
+- ont_id: 4
+  serial_number: CXNK00A3F104
+  registration_id: null
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1004
+  description: 118 Alder St
+  pon_port: 1/1/1
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth3
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth4
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 5
+  serial_number: CXNK00A3F105
+  registration_id: null
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1005
+  description: 124 Alder St
+  pon_port: 1/1/1
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 6
+  serial_number: CXNK00A3F106
+  registration_id: null
+  profile: 812G-1
+  admin_state: enabled
+  subscriber_id: SUB-1006
+  description: 131 Alder St
+  pon_port: 1/1/1
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+  - port: eth2
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 200
+    inner_vlan: null
+    bandwidth_profile: VOICE
+    tag_action: '2'
+    admin_state: enabled
+    description: null
+- ont_id: 7
+  serial_number: CXNK00A3F107
+  registration_id: null
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1007
+  description: 137 Alder St
+  pon_port: 1/1/1
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth3
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth4
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 8
+  serial_number: CXNK00A3F108
+  registration_id: null
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1008
+  description: 140 Alder St
+  pon_port: 1/1/1
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 9
+  serial_number: CXNK00B7C209
+  registration_id: null
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1009
+  description: 12 Birch Ave
+  pon_port: 1/1/2
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+  - port: eth2
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 200
+    inner_vlan: null
+    bandwidth_profile: VOICE
+    tag_action: '2'
+    admin_state: enabled
+    description: null
+- ont_id: 10
+  serial_number: CXNK00B7C210
+  registration_id: null
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1010
+  description: 18 Birch Ave
+  pon_port: 1/1/2
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth3
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth4
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 11
+  serial_number: CXNK00B7C211
+  registration_id: null
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1011
+  description: 25 Birch Ave
+  pon_port: 1/1/2
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 12
+  serial_number: CXNK00B7C212
+  registration_id: null
+  profile: 812G-1
+  admin_state: enabled
+  subscriber_id: SUB-1012
+  description: 31 Birch Ave
+  pon_port: 1/1/2
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+  - port: eth2
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 200
+    inner_vlan: null
+    bandwidth_profile: VOICE
+    tag_action: '2'
+    admin_state: enabled
+    description: null
+- ont_id: 13
+  serial_number: CXNK00B7C213
+  registration_id: null
+  profile: 716GE-I
+  admin_state: enabled
+  subscriber_id: SUB-1013
+  description: 40 Birch Ave
+  pon_port: 1/1/2
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null
+- ont_id: 14
+  serial_number: CXNK00B7C214
+  registration_id: null
+  profile: 844G-1
+  admin_state: enabled
+  subscriber_id: SUB-1014
+  description: 46 Birch Ave
+  pon_port: 1/1/2
+  ports:
+  - port: eth1
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth2
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth3
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  - port: eth4
+    mode: bridge
+    admin_state: enabled
+    subscriber_id: null
+    security_profile: null
+    description: null
+  services:
+  - port: eth1
+    service_index: 1
+    attachment: ethernet
+    ont_slot: '3'
+    vlan: 100
+    inner_vlan: null
+    bandwidth_profile: RES-1G
+    tag_action: '1'
+    admin_state: enabled
+    description: null

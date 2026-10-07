@@ -10,7 +10,7 @@ these routes (see app/legacy/models.py for the event shapes).
 """
 
 from fastapi import APIRouter, Depends, Path, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Optional
 import logging
 
@@ -20,7 +20,8 @@ from app.legacy.events import event_to_command
 from app.legacy.models import GponSignupEvent, XgsCutoverEvent
 from app.models.job_model import JobAccepted, new_id
 from app.models.provisioning_model import (
-    EthernetService, NETWORK_PATTERN, OntId, ProfileName, SerialNumber, SubscriberId
+    EthernetPortConfig, EthernetService, NETWORK_PATTERN, OntId, ProfileName, SerialNumber, SubscriberId,
+    check_unique_ports
 )
 from app.routes.job_routes import accepted
 
@@ -40,7 +41,12 @@ class SignupRequest(BaseModel):
     profile: ProfileName = Field(..., description="ONT profile")
     description: Optional[str] = Field(None, max_length=64)
     services: List[EthernetService] = Field(..., min_length=1, max_length=8)
+    ports: List[EthernetPortConfig] = Field(
+        default_factory=list, max_length=8,
+        description="Ethernet port settings (admin state, subscriber ID, security profile)")
     wait_for_online: bool = Field(False, description="Hold the job open until the ONT comes online")
+
+    _unique_ports = field_validator("ports")(check_unique_ports)
 
 
 class CutoverRequest(BaseModel):
