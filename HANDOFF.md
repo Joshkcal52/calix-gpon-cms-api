@@ -29,17 +29,17 @@ In the export, ONTs 3, 4, 7 and others are 844Gs whose ports all run as bridges:
 
 - Every CMS operation through **cms-nbi-client 0.1.0** over real SOAP to the mock NBI server, including two library bugs found and worked around: its Ethernet-port update always raises `KeyError`, and its service update silently drops bandwidth-profile and tag-action changes.
 - Every change is repeat-safe (each test runs it twice). A failed provisioning deletes the ONT it created.
-- The queue's delivery rules over the Kafka wire protocol (librdkafka's mock cluster), including a worker killed mid-job.
+- The queue's delivery rules over the Kafka wire protocol (librdkafka's mock cluster), including a worker killed mid-job. The demo (`deploy/demo/`) has also run end to end in Docker against a single Apache Kafka 3.7.1 broker.
 - The read-only check sends no write (a guard refuses one) and blanks the password in its dumps. API keys are enforced on every `/api/v2` route. The old `/api/v1` SSH routes are gone, and CORS allows no origin unless `CORS_ALLOW_ORIGINS` lists it.
 - Every exported ONT and planned subscriber carries its voice status, and a status that cannot be read is `unknown`, never `none`.
 
 ## What is not proven
 
-- **Nothing has touched a real CMS, SMx, Sonar or Kafka broker.** Request shapes come from the library; any reply field it does not parse is inferred (list in ARCHITECTURE.md).
+- **Nothing has touched a real CMS, SMx, Sonar or production Kafka cluster** (only one demo broker, with no replication). Request shapes come from the library; any reply field it does not parse is inferred (list in ARCHITECTURE.md).
 - **The router side of the 844G is not known**: how router-side services and ports are addressed, and how CMS shows whether each Ethernet port is in bridge or router mode. All of it sits behind `app/nbi/router_side.py` and is off until configured: router writes are refused, modes read as `unknown`, and the SMx plan fails rather than default anything. The NOC's lesson: 844Gs that ran as bridges were rebuilt as router/ONT combos, and customers ended up with double NAT.
 - **Whether customers keep their ONT through a cutover is not settled.** Both are supported: the export carries the existing serial, and a replacement serial can be filled in.
 - **Voice is not read at all.** The voice status comes from the profile's `pots` attribute, whose meaning as a port count is inferred (`cms_check` prints its raw values).
-- SMx parameter names come from the IDI billing docs, not from SMx. All mapping files hold demo values. Docker and Kubernetes files have never been run.
+- SMx parameter names come from the IDI billing docs, not from SMx. All mapping files hold demo values. The Kubernetes manifests have never been applied.
 
 ## First three things to do with a real CMS
 

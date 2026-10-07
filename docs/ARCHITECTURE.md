@@ -188,7 +188,7 @@ Inferred, not verified, because nobody on this project has a real CMS:
 - **The voice port count**: read from the OntProf `pots` attribute. That it is a count of voice ports is inferred.
 - **The IDI docs say "the Calix API expects 200 + the port number" for Ethernet ports** (port 1 as 201). The library uses plain port numbers. Which one your CMS wants is unknown; `cms_check` prints the port IDs of real services.
 - The SMx parameter names (taken from the IDI docs, not from SMx) and every entry in `smx_map.yml` and `profile_map.yml`, which are demo values.
-- Apache Kafka itself (only the mock cluster), Docker and Kubernetes (written, parsed, never run).
+- Apache Kafka beyond one demo broker (no replication, failover or rebalancing across real brokers), and Kubernetes (written and parsed, never applied). The image is built and the demo Compose file has run end to end.
 
 ## Before this touches a real network
 

@@ -4,7 +4,7 @@ A REST and Kafka front end for legacy Calix GPON. What the SMx API is for the ne
 
 It also covers the rest of an ONT's life (suspend, restore, change, disconnect) and takes the retyping out of a cutover to SMx: it exports what CMS holds for a PON in SMx's terms and plans the SMx requests as a dry run.
 
-> **Status: tested against a simulated CMS only.** Nothing here has run against a real CMS, SMx or Kafka broker. Start with [HANDOFF.md](HANDOFF.md) for what is proven, what is not, and the first three things to do with a real CMS.
+> **Status: tested against a simulated CMS only.** Nothing here has run against a real CMS or SMx, or a production Kafka cluster. Start with [HANDOFF.md](HANDOFF.md) for what is proven, what is not, and the first three things to do with a real CMS.
 
 ## What it does
 
@@ -148,7 +148,7 @@ WORKER_LANES=legacy,provisioning python -m app.worker
 Workers commit a Kafka offset only once a command has succeeded or its failure has been recorded, so a worker that dies mid-job loses nothing. Producers other than the API can write signup and cutover events straight to the events topic.
 
 - A demo with Kafka, the API, a worker and a mock CMS server: [deploy/demo/README.md](deploy/demo/README.md)
-- Container image and Kubernetes manifests: `deploy/Dockerfile` and `deploy/k8s/gpon-cms.yaml`. They have not been built or applied yet.
+- Container image and Kubernetes manifests: `deploy/Dockerfile` and `deploy/k8s/gpon-cms.yaml`. The image has been built and the demo Compose file run with it; the Kubernetes manifests have not been applied to a cluster.
 
 ## Tests
 
