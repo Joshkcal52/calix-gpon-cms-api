@@ -14,9 +14,6 @@ When API_KEYS is not set:
   - otherwise every /api/v2 route answers 503 auth_not_configured. A real
     deployment cannot be left open by forgetting a variable.
 
-Playbooks started by the API call back into it; AUTOMATION_API_KEY is the key
-they are given (it must be one of API_KEYS).
-
 /api/v1 (rogue ONT detection, out of scope) and /health are not covered.
 Browsers' EventSource cannot set headers, so a browser following a job's SSE
 stream needs a server-side proxy that adds the key.
@@ -64,8 +61,6 @@ def check_configuration(settings) -> None:
         logger.warning("API_KEYS is not set: /api/v2 is open because MOCK_MODE is on")
     elif not keys:
         logger.warning("API_KEYS is not set: every /api/v2 route will answer 503 until it is")
-    if settings.automation_api_key and settings.automation_api_key not in keys.values():
-        raise ValueError("AUTOMATION_API_KEY must be one of the keys in API_KEYS")
 
 
 async def require_api_key(request: Request,

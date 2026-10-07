@@ -269,7 +269,7 @@ class MockCmsBackend:
 
     def damage(self, pon_port: str) -> List[str]:
         """
-        Simulate a bad change on one PON, for rollback demos: delete an ONT,
+        Simulate a bad change on one PON, for snapshot-compare demos: delete an ONT,
         disable one, repoint one at the wrong VLAN and give one a stray service.
         Returns a description of what was broken.
         """

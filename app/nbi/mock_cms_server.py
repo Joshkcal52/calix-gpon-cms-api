@@ -1,7 +1,7 @@
 """
 Mock CMS NBI Server
 A stand-in for the Calix CMS northbound interface that speaks SOAP over HTTP,
-so the real client path (cms-nbi-client, or Ansible's uri module) can be
+so the real client path (cms-nbi-client) can be
 exercised without a CMS.
 
     uvicorn app.nbi.mock_cms_server:app --port 18080

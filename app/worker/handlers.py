@@ -6,20 +6,18 @@ payload exactly as it came off the queue and validate it again before use.
 
 from typing import Any, Dict
 
-from app.controller.automation_controller import PlaybookRunner, run_playbook
 from app.controller.lifecycle_controller import apply_ont_change
 from app.controller.provisioning_controller import activate_ont
 from app.legacy.handlers import build_legacy_handlers
 from app.messaging.bus import MessageBus
 from app.models.lifecycle_model import ACTION_CHANGE_ONT, OntChangeAdapter
-from app.models.job_model import ACTION_ACTIVATE_ONT, ACTION_RUN_PLAYBOOK
+from app.models.job_model import ACTION_ACTIVATE_ONT
 from app.models.provisioning_model import ActivationRequest
 from app.nbi.gateway import NbiGateway
 from app.worker.runner import Handler, JobContext
 
 
-def build_handlers(settings: Any, gateway: NbiGateway, playbook_runner: PlaybookRunner,
-                   bus: MessageBus) -> Dict[str, Handler]:
+def build_handlers(settings: Any, gateway: NbiGateway, bus: MessageBus) -> Dict[str, Handler]:
 
     async def handle_activate_ont(context: JobContext, payload: Dict[str, Any]) -> Dict[str, Any]:
         request = ActivationRequest.model_validate(payload["request"])
@@ -32,13 +30,8 @@ def build_handlers(settings: Any, gateway: NbiGateway, playbook_runner: Playbook
         change = OntChangeAdapter.validate_python(payload["change"])
         return await apply_ont_change(context, gateway, payload["network"], int(payload["ont_id"]), change)
 
-    async def handle_run_playbook(context: JobContext, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return await run_playbook(context, playbook_runner, payload, api_url=settings.api_base_url,
-                                  api_key=settings.automation_api_key)
-
     return {
         ACTION_ACTIVATE_ONT: handle_activate_ont,
-        ACTION_RUN_PLAYBOOK: handle_run_playbook,
         ACTION_CHANGE_ONT: handle_change_ont,
         **build_legacy_handlers(settings, gateway, bus),
     }

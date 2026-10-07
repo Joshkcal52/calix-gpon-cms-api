@@ -33,8 +33,6 @@ class Settings(BaseSettings):
     # API keys for every /api/v2 route, comma-separated. Each entry is a key, or name:key
     # (the name is logged with each request). See app/auth.py.
     api_keys: Optional[str] = None
-    # The key the API hands to playbooks it starts, so they can call back into it
-    automation_api_key: Optional[str] = None
 
     # Mock mode: simulate the E7-20 instead of opening an SSH connection.
     # For development without lab hardware. Set MOCK_MODE=true in .env
@@ -85,15 +83,8 @@ class Settings(BaseSettings):
     # Run a worker inside the API process. Default: yes without Kafka, no with it
     # (with Kafka, workers run as their own pods: python -m app.worker).
     worker_embedded: Optional[bool] = None
-    worker_lanes: str = "provisioning,automation,legacy"
+    worker_lanes: str = "provisioning,legacy"
     worker_heartbeat_file: Optional[str] = None  # touched every 10s for a liveness probe
-
-    # --- Ansible (the heavy lane) ---
-    # Simulate playbook runs instead of starting Ansible. Default: same as MOCK_MODE.
-    ansible_mock: Optional[bool] = None
-    ansible_timeout_seconds: float = 600.0
-    # Where playbooks reach this API. They never talk to CMS directly.
-    api_base_url: str = "http://127.0.0.1:8000"
 
     # Target Platform Settings
     target_platform: str = "Calix E7-20 (GPON)"
@@ -109,17 +100,15 @@ class Settings(BaseSettings):
 
     def worker_lane_list(self) -> List[str]:
         lanes = [lane.strip() for lane in self.worker_lanes.split(",") if lane.strip()]
-        unknown = set(lanes) - {"provisioning", "automation", "legacy"}
+        unknown = set(lanes) - {"provisioning", "legacy"}
         if unknown or not lanes:
-            raise ValueError(f"WORKER_LANES must list provisioning, automation and/or legacy, "
+            raise ValueError(f"WORKER_LANES must list provisioning and/or legacy, "
                              f"got '{self.worker_lanes}'")
         return lanes
 
     def check_worker_timeouts(self, lanes: List[str]) -> None:
         """Refuse to start a worker whose slowest command could outlast Kafka's patience"""
         slowest = self.activation_verify_timeout_seconds + 6 * self.nbi_timeout_seconds
-        if "automation" in lanes:
-            slowest = max(slowest, self.ansible_timeout_seconds)
         if self.kafka_bootstrap_servers and slowest + 60 > self.kafka_max_poll_interval_seconds:
             raise ValueError(
                 f"KAFKA_MAX_POLL_INTERVAL_SECONDS ({self.kafka_max_poll_interval_seconds:g}) must be at least "

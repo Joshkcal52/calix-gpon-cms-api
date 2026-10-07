@@ -3,7 +3,7 @@ Rogue ONT Detection API
 A FastAPI application for detecting rogue ONTs on Calix E7-20 GPON systems.
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -14,10 +14,10 @@ import logging
 
 # Import routes
 from app.routes import ssh_routes, ont_routes, hp_routes
-from app.routes import provisioning_routes, job_routes, automation_routes, legacy_routes, lifecycle_routes, cutover_routes
+from app.routes import provisioning_routes, job_routes, legacy_routes, lifecycle_routes, cutover_routes
 
 # Import services for the v2 integration layer
-from app.controller.automation_controller import build_playbook_runner
+from app.auth import ApiAuthError, check_configuration, require_api_key
 from app.controller.job_controller import JobStore
 from app.messaging.bus import BusUnavailableError, build_bus
 from app.nbi.errors import NbiError
@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     the CMS gateway, the message bus, the job store and (unless workers run
     as separate pods) an embedded worker.
     """
+    check_configuration(settings)
     bus = build_bus(settings)
     await bus.start()
     gateway = build_gateway(settings)
@@ -57,7 +58,7 @@ async def lifespan(app: FastAPI):
         lanes = settings.worker_lane_list()
         settings.check_worker_timeouts(lanes)
         worker = Worker(
-            bus, lanes, build_handlers(settings, gateway, build_playbook_runner(settings), bus),
+            bus, lanes, build_handlers(settings, gateway, bus),
             max_command_age=settings.command_max_age_seconds)
         app.state.worker = worker
         worker_task = asyncio.create_task(worker.run(), name="embedded-worker")
@@ -99,12 +100,9 @@ app.add_middleware(
 app.include_router(ssh_routes.router)
 app.include_router(ont_routes.router)
 app.include_router(hp_routes.router)
-app.include_router(provisioning_routes.router)
-app.include_router(legacy_routes.router)
-app.include_router(lifecycle_routes.router)
-app.include_router(cutover_routes.router)
-app.include_router(job_routes.router)
-app.include_router(automation_routes.router)
+# Every /api/v2 route needs an API key (app/auth.py)
+for v2 in (provisioning_routes, legacy_routes, lifecycle_routes, cutover_routes, job_routes):
+    app.include_router(v2.router, dependencies=[Depends(require_api_key)])
 
 
 @app.exception_handler(NbiError)
@@ -117,6 +115,12 @@ async def nbi_error_handler(request: Request, exc: NbiError) -> JSONResponse:
     headers = {}
     if exc.retry_after is not None:
         headers["Retry-After"] = str(max(1, round(exc.retry_after)))
+    return JSONResponse(status_code=exc.http_status, content={"error": exc.to_dict()}, headers=headers)
+
+
+@app.exception_handler(ApiAuthError)
+async def auth_error_handler(request: Request, exc: ApiAuthError) -> JSONResponse:
+    headers = {"WWW-Authenticate": "Bearer"} if exc.http_status == 401 else {}
     return JSONResponse(status_code=exc.http_status, content={"error": exc.to_dict()}, headers=headers)
 
 
@@ -166,7 +170,6 @@ async def api_status() -> Dict[str, Any]:
             "ont_management": "/api/v1/onts",
             "provisioning": "/api/v2/networks/{network}",
             "jobs": "/api/v2/jobs",
-            "automation": "/api/v2/automation",
             "documentation": "/docs"
         }
     }

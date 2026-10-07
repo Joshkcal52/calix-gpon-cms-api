@@ -138,7 +138,6 @@ def test_invalid_events_are_rejected(change):
 @pytest.fixture
 def api(monkeypatch):
     monkeypatch.setattr(settings, "mock_mode", True)
-    monkeypatch.setattr(settings, "ansible_mock", None)
     monkeypatch.setattr(settings, "kafka_bootstrap_servers", None)
     monkeypatch.setattr(settings, "activation_poll_seconds", 0.01)
     with TestClient(app) as client:
@@ -387,15 +386,20 @@ def test_signup_and_cutover_through_the_real_client(cms):
 
 
 def test_the_committed_demo_snapshot_matches_what_the_exporter_produces(cms):
+    from app.nbi.router_side import MOCK_RG_ADDRESSING, RouterAddressing
+
     server, connect = cms
+    backend = connect()
+    # Made with CMS_RG_PORT_MODE_ELEMENT set and nothing else, so port modes are read (see deploy/demo/README.md)
+    backend._router = RouterAddressing(port_mode_element=MOCK_RG_ADDRESSING.port_mode_element)
 
     async def scenario():
-        gateway = NbiGateway(connect(), timeout=10)
-        snapshot = await take_snapshot(gateway, "OLT-MOCK", MOCK_NETWORK)
+        gateway = NbiGateway(backend, timeout=10)
+        snapshot = await take_snapshot(gateway, MOCK_NETWORK, "OLT-MOCK")
         await gateway.close()
         return snapshot
 
     fresh = asyncio.run(scenario())
-    committed = yaml.safe_load((REPO / "deploy/demo/network-backups/olts/OLT-MOCK.yml").read_text())
+    committed = yaml.safe_load((REPO / "deploy/demo/snapshots/OLT-MOCK.yml").read_text())
     fresh.pop("captured_at"), committed.pop("captured_at")
     assert fresh == committed

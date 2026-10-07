@@ -6,9 +6,9 @@ replaces building the GPON-to-XGS cutover spreadsheet by hand.
 
     python -m app.legacy.export --network NTWK-OLT-04 [--pon 1/2/3 | --card 1/2] --output-dir ./cutover
 
-writes three files: <name>.json (everything), <name>.services.csv (one row
-per data service, for a person to fill in) and <name>.ports.csv (port
-settings). The same data is served by GET /api/v2/networks/{network}/export.
+writes four files: <name>.json (everything), <name>.services.csv (one row
+per data service, for a person to fill in), <name>.ports.csv (port settings)
+and <name>.snapshot.yml (for a later read-only compare, app/legacy/snapshot.py). The same data is served by GET /api/v2/networks/{network}/export.
 
 Only reads CMS. Uses the same CMS settings as the API (CMS_HOST, ... or
 MOCK_MODE).
@@ -424,6 +424,8 @@ async def main() -> None:
     (directory / f"{stem}.json").write_text(export.model_dump_json(indent=2), encoding="utf-8")
     (directory / f"{stem}.services.csv").write_text(to_csv(service_rows(export), SERVICE_COLUMNS), encoding="utf-8")
     (directory / f"{stem}.ports.csv").write_text(to_csv(port_rows(export), PORT_COLUMNS), encoding="utf-8")
+    from app.legacy.snapshot import snapshot_from_export, to_yaml
+    (directory / f"{stem}.snapshot.yml").write_text(to_yaml(snapshot_from_export(export)), encoding="utf-8")
     services = sum(len(r.data_services) for r in export.records)
     with_notes = sum(1 for r in export.records if r.notes)
     bridges = sum(1 for r in export.records if r.ont.legacy.router_capable_running_as_bridge)

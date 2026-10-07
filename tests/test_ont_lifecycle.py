@@ -35,7 +35,6 @@ BASE = f"/api/v2/networks/{NET}"
 @pytest.fixture
 def api(monkeypatch):
     monkeypatch.setattr(settings, "mock_mode", True)
-    monkeypatch.setattr(settings, "ansible_mock", None)
     monkeypatch.setattr(settings, "kafka_bootstrap_servers", None)
     monkeypatch.setattr(settings, "activation_poll_seconds", 0.01)
     monkeypatch.setattr(settings, "api_keys", None)
@@ -419,13 +418,3 @@ def test_lifecycle_changes_through_the_real_client_are_repeat_safe(cms):
         await gateway.close()
 
     asyncio.run(scenario())
-
-
-def test_the_snapshot_leaves_out_onts_it_could_not_restore_correctly(api, caplog):
-    from app.legacy.snapshot import take_snapshot
-
-    signup(api, services=[{"vlan": 100, "bandwidth_profile": "RES-1G", "tag_action": "1", "attach_to": "router"}])
-    gateway = api.app.state.gateway
-    snapshot = asyncio.run(take_snapshot(gateway, "OLT-MOCK", NET))
-    assert 15 not in [o["ont_id"] for o in snapshot["onts"]] and len(snapshot["onts"]) == 14
-    assert "ONT 15 left out of the snapshot" in caplog.text

@@ -34,7 +34,6 @@ BASE = f"/api/v2/networks/{NET}"
 @pytest.fixture
 def api(monkeypatch):
     monkeypatch.setattr(settings, "mock_mode", True)
-    monkeypatch.setattr(settings, "ansible_mock", None)
     monkeypatch.setattr(settings, "kafka_bootstrap_servers", None)
     monkeypatch.setattr(settings, "activation_poll_seconds", 0.01)
     monkeypatch.setattr(settings, "api_keys", None)
@@ -138,7 +137,7 @@ def test_an_ont_that_cannot_be_read_is_kept_with_a_note(api, monkeypatch):
     assert len(export["records"]) == 14
 
 
-def test_the_export_cli_writes_json_and_both_csvs(tmp_path):
+def test_the_export_cli_writes_json_both_csvs_and_a_snapshot(tmp_path):
     env = {**os.environ, "MOCK_MODE": "true"}
     run = subprocess.run([sys.executable, "-m", "app.legacy.export", "--network", NET, "--pon", "1/1/1",
                           "--output-dir", str(tmp_path)], cwd=REPO, env=env, capture_output=True, text=True,
@@ -147,7 +146,7 @@ def test_the_export_cli_writes_json_and_both_csvs(tmp_path):
     assert "Exported 8 ONTs" in run.stderr
     names = sorted(p.name for p in tmp_path.iterdir())
     assert names == ["NTWK-MOCK-E7-pon-1-1-1.json", "NTWK-MOCK-E7-pon-1-1-1.ports.csv",
-                     "NTWK-MOCK-E7-pon-1-1-1.services.csv"]
+                     "NTWK-MOCK-E7-pon-1-1-1.services.csv", "NTWK-MOCK-E7-pon-1-1-1.snapshot.yml"]
     export = CutoverExport.model_validate_json((tmp_path / names[0]).read_text())
     assert export.pon_port == "1/1/1" and len(export.records) == 8
 

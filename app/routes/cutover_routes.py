@@ -1,13 +1,14 @@
 """
 Cutover Routes (read-only)
-Export a network or PON port from CMS in SMx's terms, and plan the SMx
-requests that would recreate each subscriber on XGS. Nothing here changes CMS
-and nothing is sent to SMx.
+Export a network, card or PON port from CMS in SMx's terms (or as a
+snapshot), compare a saved snapshot with CMS, and plan the SMx requests that
+would recreate each subscriber on XGS. Nothing here changes CMS and nothing
+is sent to SMx.
 """
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import PlainTextResponse
@@ -19,6 +20,7 @@ from app.legacy.export import (
     to_csv
 )
 from app.legacy.smx import SmxMap, SmxPlan, plan_export
+from app.legacy.snapshot import Comparison, compare_with_cms, snapshot_from_export, to_yaml
 from app.models.provisioning_model import NETWORK_PATTERN
 from app.nbi.errors import NbiConflictError, NbiNotFoundError
 from app.nbi.gateway import NbiGateway
@@ -44,7 +46,8 @@ def _mapping() -> SmxMap:
 async def export(network: str = NetworkPath,
                  pon: Optional[str] = Query(None, pattern=r"^\d+/\d+/\d+$", description="Only this PON port"),
                  card: Optional[str] = Query(None, pattern=r"^\d+/\d+$", description="Only this card (shelf/card)"),
-                 format: str = Query("json", pattern="^(json|csv)$"),
+                 format: str = Query("json", pattern="^(json|csv|snapshot)$",
+                                     description="json, csv, or snapshot (YAML, for a later compare)"),
                  table: str = Query("services", pattern="^(services|ports)$", description="Which CSV"),
                  ports: bool = Query(True, description="Read port settings (one CMS call per port)"),
                  gateway: NbiGateway = Depends(get_gateway)):
@@ -62,12 +65,30 @@ async def export(network: str = NetworkPath,
     result = await export_network(gateway, network, pon, include_ports=ports, card=card)
     if format == "json":
         return result
+    if format == "snapshot":
+        return PlainTextResponse(to_yaml(snapshot_from_export(result)), media_type="application/yaml")
     rows, columns = (service_rows(result), SERVICE_COLUMNS) if table == "services" else (port_rows(result),
                                                                                          PORT_COLUMNS)
     scope = f"-pon-{pon.replace('/', '-')}" if pon else (f"-card-{card.replace('/', '-')}" if card else "")
     name = f"{network}{scope}.{table}.csv"
     return PlainTextResponse(to_csv(rows, columns), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.post("/networks/{network}/snapshot-compare", response_model=Comparison)
+async def snapshot_compare(snapshot: Dict[str, Any], network: str = NetworkPath,
+                           gateway: NbiGateway = Depends(get_gateway)) -> Comparison:
+    """
+    Read-only: what differs between a saved snapshot (as JSON) and what CMS
+    holds now, over the snapshot's own scope (network, card or PON port).
+    Nothing is changed.
+    """
+    if snapshot.get("network") != network:
+        raise HTTPException(status_code=422, detail=f"This snapshot is of {snapshot.get('network')!r}, not {network}")
+    try:
+        return await compare_with_cms(gateway, snapshot)
+    except (KeyError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"Not a usable snapshot: {e}") from None
 
 
 class PlanRequest(BaseModel):

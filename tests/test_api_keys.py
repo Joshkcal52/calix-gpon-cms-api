@@ -2,14 +2,13 @@
 Tests for API keys on /api/v2 (app/auth.py).
 """
 
-import asyncio
 import json
 import re
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.auth import check_configuration, parse_keys
+from app.auth import parse_keys
 from app.nbi.mock_cms import MOCK_NETWORK
 from config import settings
 from main import app
@@ -23,11 +22,9 @@ PATH_VALUES = {"network": MOCK_NETWORK, "ont_id": "3", "port": "eth1", "service_
 @pytest.fixture
 def keyed(monkeypatch):
     monkeypatch.setattr(settings, "mock_mode", True)
-    monkeypatch.setattr(settings, "ansible_mock", None)
     monkeypatch.setattr(settings, "kafka_bootstrap_servers", None)
     monkeypatch.setattr(settings, "activation_poll_seconds", 0.01)
     monkeypatch.setattr(settings, "api_keys", f"portal:{PORTAL},noc:{NOC}")
-    monkeypatch.setattr(settings, "automation_api_key", NOC)
     with TestClient(app) as client:
         client.app.state.gateway.backend.latency = 0
         yield client
@@ -42,7 +39,7 @@ def v2_routes():
 
 def test_every_v2_route_refuses_a_request_without_a_valid_key(keyed):
     routes = list(v2_routes())
-    assert len(routes) >= 25  # all of them, not a sample
+    assert len(routes) >= 20  # all of them, not a sample
     for method, path in routes:
         for headers in ({}, {"X-API-Key": "wrong-key-0000000000"}, {"Authorization": f"Basic {PORTAL}"}):
             response = keyed.request(method, path, headers=headers, json={})
@@ -72,7 +69,6 @@ def test_a_queued_job_can_be_followed_with_the_key(keyed):
 
 def test_without_keys_the_api_is_open_only_in_mock_mode(monkeypatch):
     monkeypatch.setattr(settings, "api_keys", None)
-    monkeypatch.setattr(settings, "automation_api_key", None)
     monkeypatch.setattr(settings, "kafka_bootstrap_servers", None)
     monkeypatch.setattr(settings, "mock_mode", True)
     with TestClient(app) as client:
@@ -93,35 +89,3 @@ def test_key_configuration_is_checked():
         parse_keys("portal:short")
     with pytest.raises(ValueError, match="used twice"):
         parse_keys("a:abcdefghijklmnop,a:qrstuvwxyz012345")
-
-    class Config:
-        api_keys, mock_mode, automation_api_key = f"portal:{PORTAL}", False, NOC
-    with pytest.raises(ValueError, match="AUTOMATION_API_KEY"):
-        check_configuration(Config)
-
-
-def test_playbooks_are_handed_the_automation_key():
-    from app.controller.automation_controller import run_playbook
-
-    seen = {}
-
-    class Runner:
-        name = "capture"
-
-        async def run(self, spec, variables, limit, job_id, emit):
-            seen.update(variables)
-            return {}
-
-    class Context:
-        job_id = "job"
-
-        async def emit(self, *args, **kwargs):
-            pass
-
-        def emit_threadsafe(self, *args, **kwargs):
-            pass
-
-    asyncio.run(run_playbook(Context(), Runner(), {"playbook": "baseline_audit",
-                                                   "variables": {"network": MOCK_NETWORK, "ont_ids": [1]}},
-                             api_url="http://api", api_key=NOC))
-    assert seen["api_key"] == NOC and seen["api_url"] == "http://api"
