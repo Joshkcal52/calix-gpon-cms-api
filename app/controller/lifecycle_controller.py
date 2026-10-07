@@ -93,9 +93,10 @@ async def _delete_service(context: JobContext, gateway: NbiGateway, network: str
         await context.step(2, 2, f"The {label} does not exist; nothing to delete")
         return {**result, "deleted": False, "already_absent": True}
     if change.expect_vlan is not None and service.vlan != change.expect_vlan:
-        raise NbiConflictError(f"The {label} is on VLAN {service.vlan}, not {change.expect_vlan}. Not deleted.")
+        raise NbiConflictError(f"The {label} is on {_vlan_text(service.vlan)}, not VLAN {change.expect_vlan}. "
+                               f"Not deleted.")
 
-    await context.step(2, 2, f"Deleting {label} (VLAN {service.vlan})")
+    await context.step(2, 2, f"Deleting {label} ({_vlan_text(service.vlan)})")
     await gateway.delete_service(network, ont_id, attachment, number, change.service_index)
     return {**result, "deleted": True, "vlan": service.vlan}
 
@@ -119,7 +120,7 @@ async def _delete_ont(context: JobContext, gateway: NbiGateway, network: str, on
         raise NbiConflictError(f"ONT {ont_id} on {network} has serial number {ont.serial_number}, not "
                                f"{change.serial_number}. Nothing was deleted.")
     if ont.services and not change.force:
-        listed = ", ".join(f"{s.attachment.value} port {s.ont_port} service {s.service_index} (VLAN {s.vlan})"
+        listed = ", ".join(f"{s.attachment.value} port {s.ont_port} service {s.service_index} ({_vlan_text(s.vlan)})"
                            for s in ont.services)
         raise NbiConflictError(f"ONT {ont_id} still has {len(ont.services)} service(s): {listed}. Delete them "
                                f"first, or send force=true to delete them with the ONT.")
@@ -127,3 +128,7 @@ async def _delete_ont(context: JobContext, gateway: NbiGateway, network: str, on
     await context.step(2, 2, f"Deleting ONT {ont_id} ({ont.serial_number}) and {len(ont.services)} service(s)")
     await gateway.delete_ont(network, ont_id)
     return {"deleted": True, "serial_number": ont.serial_number, "services_removed": len(ont.services)}
+
+
+def _vlan_text(vlan: "int | None") -> str:
+    return f"VLAN {vlan}" if vlan is not None else "no outer VLAN"

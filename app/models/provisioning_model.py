@@ -32,6 +32,19 @@ PORT_PATTERN = r"^(eth|rg)[1-8]$"
 PortName = Annotated[str, Field(pattern=PORT_PATTERN, description="eth1..eth8, or rg1 for the router side")]
 
 
+# The outer VLAN of a service, when it has one: 2 to 4093 per the IDI billing CMS R15.x docs
+# ("Outer VLAN ID ... Positive Integer with a value between 2 - 4093")
+OuterVlan = Annotated[int, Field(ge=2, le=4093)]
+
+
+# A peak-rate (PIR) override on a service, sent to CMS as us-pir-override / ds-pir-override. "none"
+# means no override (what this project always sent before). The format comes from IDI's CMS R15.x
+# docs ("String, Optional, Format Example = 100m"); that "g" is accepted too, and nothing else, is
+# inferred from the examples, not confirmed against a CMS.
+PeakRate = Annotated[str, Field(pattern=r"^(none|[1-9][0-9]{0,3}[mg])$",
+                                description='Peak rate override, e.g. "100m", "1g", or "none" for no override')]
+
+
 class Attachment(str, Enum):
     """Where a service is attached on the ONT"""
     ETHERNET = "ethernet"  # a plain Ethernet port (CMS ONT slot 3)
@@ -50,6 +63,22 @@ def parse_port(name: str) -> Tuple[Attachment, int]:
     return Attachment.ETHERNET, int(name[3:])
 
 
+def service_identity(attachment: "Attachment | str", ont_port: int, vlan: Optional[int],
+                     tag_action: Optional[str]) -> Tuple[Any, ...]:
+    """
+    What makes a service the same service when activation is run again.
+
+    With an outer VLAN: its side, port and VLAN (as before). Without one: its
+    side, port and tag action, because then the tag action decides the VLAN.
+    The two never match each other, so a service with a VLAN is never taken
+    for one without, or the other way round. Two services in one request may
+    not share an identity (check_unique_services).
+    """
+    if vlan is not None:
+        return Attachment(attachment), ont_port, "vlan", vlan
+    return Attachment(attachment), ont_port, "tag-action", tag_action or ""
+
+
 class OperState(str, Enum):
     ONLINE = "online"
     OFFLINE = "offline"
@@ -59,7 +88,10 @@ class EthernetService(BaseModel):
     """A service to bind to an ONT Ethernet port, or to its built-in router"""
     model_config = ConfigDict(extra="forbid")
 
-    vlan: int = Field(..., ge=1, le=4094, description="Service VLAN (sent to CMS as the outer tag)")
+    vlan: Optional[OuterVlan] = Field(
+        None, description="Service VLAN, sent to CMS as the outer tag. Optional: leave it out when the tag action "
+                          "does not need one (IDI's CMS R15.x docs: \"Do not include if the value is not required by "
+                          "Service Tag Action\"). A service without a VLAN needs a tag_action")
     ont_port: int = Field(1, ge=1, le=8, description="Port number on the side given by attach_to")
     attach_to: Literal["ethernet", "router"] = Field(
         "ethernet", description="ethernet: a plain Ethernet port. router: the built-in router (RG) of an "
@@ -69,6 +101,20 @@ class EthernetService(BaseModel):
     tag_action: Optional[ProfileName] = Field(
         None, description="Service tag action (a numeric ID on a real CMS, which requires one)")
     description: Optional[str] = Field(None, max_length=64)
+    us_pir_override: Optional[PeakRate] = Field(
+        None, description='Upstream peak rate override, e.g. "100m". Empty sends "none" (no override)')
+    ds_pir_override: Optional[PeakRate] = Field(
+        None, description='Downstream peak rate override, e.g. "1g". Empty sends "none" (no override)')
+
+    @model_validator(mode="after")
+    def _identifiable(self) -> "EthernetService":
+        if self.vlan is None and not self.tag_action:
+            raise ValueError("A service without a vlan needs a tag_action: the tag action then decides the VLAN, "
+                             "and it is what tells this service apart from others on the same port")
+        return self
+
+    def identity(self) -> Tuple[Any, ...]:
+        return service_identity(Attachment(self.attach_to), self.ont_port, self.vlan, self.tag_action)
 
 
 class ProvisionedService(BaseModel):
@@ -83,6 +129,12 @@ class ProvisionedService(BaseModel):
     tag_action: Optional[str] = None
     admin_state: str = "enabled"
     description: Optional[str] = None
+    us_pir_override: Optional[str] = Field(None, description='Upstream peak rate override as CMS reports it, '
+                                                             'e.g. "100m" or "none"')
+    ds_pir_override: Optional[str] = Field(None, description="Downstream peak rate override as CMS reports it")
+
+    def identity(self) -> Tuple[Any, ...]:
+        return service_identity(self.attachment, self.ont_port, self.vlan, self.tag_action)
 
 
 class DiscoveredOnt(BaseModel):
@@ -154,12 +206,17 @@ class ServiceChange(BaseModel):
     admin_state: Optional[AdminState] = None
     bandwidth_profile: Optional[ProfileName] = None
     tag_action: Optional[ProfileName] = None
-    vlan: Optional[int] = Field(None, ge=1, le=4094, description="New outer VLAN")
+    vlan: Optional[OuterVlan] = Field(
+        None, description="New outer VLAN, 2 to 4093. A VLAN cannot be removed from a service here: delete the "
+                          "service and add it again without one")
+    us_pir_override: Optional[PeakRate] = Field(None, description='New upstream peak rate override, or "none"')
+    ds_pir_override: Optional[PeakRate] = Field(None, description='New downstream peak rate override, or "none"')
 
     @model_validator(mode="after")
     def _something(self) -> "ServiceChange":
         if not self.model_dump(exclude_none=True):
-            raise ValueError("Set at least one of admin_state, bandwidth_profile, tag_action, vlan")
+            raise ValueError("Set at least one of admin_state, bandwidth_profile, tag_action, vlan, "
+                             "us_pir_override, ds_pir_override")
         return self
 
 
@@ -223,6 +280,18 @@ def check_unique_ports(ports: List[EthernetPortConfig]) -> List[EthernetPortConf
     return ports
 
 
+def check_unique_services(services: List[EthernetService]) -> List[EthernetService]:
+    seen = set()
+    for service in services:
+        identity = service.identity()
+        if identity in seen:
+            where = f"{service.attach_to} port {service.ont_port}"
+            what = f"VLAN {service.vlan}" if service.vlan is not None else f"no VLAN and tag action {service.tag_action}"
+            raise ValueError(f"Two services on {where} with {what}: each service may be listed once")
+        seen.add(identity)
+    return services
+
+
 class OntSpec(BaseModel):
     """What the gateway needs to create an ONT"""
     serial_number: SerialNumber
@@ -248,6 +317,7 @@ class ActivationRequest(OntSpec):
     wait_for_online: bool = Field(True, description="Wait for the ONT to come online before finishing")
 
     _unique_ports = field_validator("ports")(check_unique_ports)
+    _unique_services = field_validator("services")(check_unique_services)
 
 
 class StatusCheckRequest(BaseModel):

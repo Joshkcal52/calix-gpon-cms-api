@@ -34,6 +34,10 @@ Rules:
     to_fill_in and the subscriber is marked not ready.
   - A service in an ONT slot this code does not recognise always fails the
     subscriber: it is unknown which side of the ONT it was on.
+  - A peak-rate override (us/ds-pir-override other than "none") is carried
+    over only if the mapping file's peak_rate_overrides names the SMx
+    parameter and lists the value. Otherwise the subscriber fails, naming
+    it: it is neither dropped silently nor guessed. The shipped map has none.
   - Voice is not planned: only Ethernet data services are read from CMS. Each
     plan carries the export's voice status ("not checked": the ONT has voice
     ports; "unknown": their count could not be read; "none"), and the plan
@@ -78,6 +82,15 @@ class TagActionRule(BaseModel):
         return value
 
 
+class PeakRateRule(BaseModel):
+    """How CMS peak-rate overrides become SMx parameters. Nothing here is known; every part is set by hand."""
+    model_config = ConfigDict(extra="forbid")
+
+    upstream_parameter: str = Field(..., min_length=1, description="SMx parameter for us-pir-override")
+    downstream_parameter: str = Field(..., min_length=1, description="SMx parameter for ds-pir-override")
+    values: Dict[str, Any] = Field(default_factory=dict, description='CMS value, e.g. "100m" -> SMx value')
+
+
 class SmxMap(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -87,6 +100,8 @@ class SmxMap(BaseModel):
     tag_actions: Dict[str, TagActionRule] = Field(default_factory=dict)
     ont_ports: Dict[str, str] = Field(default_factory=dict, description="CMS port -> SMx ONT Port ID")
     admin_states: Dict[str, str] = Field(default_factory=dict)
+    peak_rate_overrides: Optional[PeakRateRule] = Field(
+        None, description="Unset: a service with a peak-rate override fails its subscriber")
     service_name: str = Field("{account}-{port}-{index}")
     subscriber_defaults: Dict[str, Any] = Field(default_factory=dict)
     ont_defaults: Dict[str, Any] = Field(default_factory=dict)
@@ -219,6 +234,21 @@ def plan_subscriber(record: ExportRecord, mapping: SmxMap) -> SubscriberPlan:
             elif isinstance(rule.c_vlan, int):
                 c_vlan = rule.c_vlan
 
+        rates: Dict[str, Any] = {}
+        for direction, value in (("upstream", service.us_pir_override), ("downstream", service.ds_pir_override)):
+            if value in (None, "none"):
+                continue
+            rule = mapping.peak_rate_overrides
+            if rule is None:
+                problems.append(f"{label}: {direction} peak-rate override '{value}' on CMS, and the mapping file "
+                                f"has no peak_rate_overrides, so it cannot be carried over")
+            elif value not in rule.values:
+                problems.append(f"{label}: {direction} peak-rate override '{value}' has no entry under "
+                                f"peak_rate_overrides.values")
+            else:
+                rates[rule.upstream_parameter if direction == "upstream" else rule.downstream_parameter] = \
+                    rule.values[value]
+
         if problems:
             continue
         parameters = {
@@ -235,6 +265,7 @@ def plan_subscriber(record: ExportRecord, mapping: SmxMap) -> SubscriberPlan:
             "VLAN": vlan,
             "c-VLAN": c_vlan,
             "Admin State": admin,
+            **rates,
         }
         services.append(SmxRequest(action="Create/Update Data Service", parameters=parameters))
 

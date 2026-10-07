@@ -21,7 +21,7 @@ from app.legacy.models import GponSignupEvent, XgsCutoverEvent
 from app.models.job_model import JobAccepted, new_id
 from app.models.provisioning_model import (
     EthernetPortConfig, EthernetService, NETWORK_PATTERN, OntId, ProfileName, SerialNumber, SubscriberId,
-    check_unique_ports
+    check_unique_ports, check_unique_services
 )
 from app.routes.job_routes import accepted
 
@@ -47,6 +47,7 @@ class SignupRequest(BaseModel):
     wait_for_online: bool = Field(False, description="Hold the job open until the ONT comes online")
 
     _unique_ports = field_validator("ports")(check_unique_ports)
+    _unique_services = field_validator("services")(check_unique_services)
 
 
 class CutoverRequest(BaseModel):

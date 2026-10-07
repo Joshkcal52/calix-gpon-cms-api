@@ -51,8 +51,9 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
        require_discovery=false an ONT can be provisioned before it is installed)
     2. Create the ONT (skipped if it already exists)
     3. Configure each Ethernet port listed in `ports` (only what differs)
-    4. Bind each service (VLAN) that is not bound yet, on an Ethernet port or
-       on the router side
+    4. Bind each service that is not bound yet, on an Ethernet port or on the
+       router side. A service is identified by its side, port and VLAN, or,
+       without a VLAN, by its side, port and tag action
     5. Wait for the ONT to come online
 
     CMS applies no port template through its API, so each port setting and
@@ -106,8 +107,10 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
         await context.emit("log", f"Created ONT {ont.ont_id}", ont_id=ont.ont_id)
 
     ont_id = ont.ont_id
-    bound = {(s.vlan, s.attachment, s.ont_port) for s in ont.services}
-    missing = [s for s in request.services if (s.vlan, Attachment(s.attach_to), s.ont_port) not in bound]
+    # A service is already there if one with the same identity is: side, port and VLAN, or for a
+    # service without a VLAN, side, port and tag action (see service_identity)
+    bound = {s.identity() for s in ont.services}
+    missing = [s for s in request.services if s.identity() not in bound]
 
     try:
         await context.step(3, total_steps, f"Configuring {len(request.ports)} Ethernet port(s) on ONT {ont_id}")
@@ -127,8 +130,10 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
         for service in missing:
             await gateway.add_ethernet_service(network, ont_id, service)
             side = "router port rg" if service.attach_to == "router" else "ONT port "
-            await context.emit("log", f"Bound VLAN {service.vlan} to {side}{service.ont_port}",
-                               vlan=service.vlan, ont_port=service.ont_port, attach_to=service.attach_to)
+            what = f"VLAN {service.vlan}" if service.vlan is not None else f"tag action {service.tag_action} (no VLAN)"
+            await context.emit("log", f"Bound {what} to {side}{service.ont_port}",
+                               vlan=service.vlan, tag_action=service.tag_action, ont_port=service.ont_port,
+                               attach_to=service.attach_to)
     except NbiError as e:
         # Roll back only when CMS said no. If CMS is merely unreachable the
         # command is retried and carries on from here.

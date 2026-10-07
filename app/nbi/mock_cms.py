@@ -6,7 +6,8 @@ MOCK_MODE=true. It models one network of fourteen ONTs on two PONs
 not provisioned yet.
 
 It checks the things a real CMS would refuse (duplicate ONT IDs, serial
-numbers already in use, VLANs that do not exist) and can simulate an outage
+numbers already in use, VLANs that do not exist, a missing or unwanted outer
+VLAN under the simulation's own tag-action rule) and can simulate an outage
 so the circuit breaker can be exercised.
 
 This is a behavioural sketch, not a copy of CMS: no XML is exchanged and the
@@ -38,6 +39,12 @@ MOCK_PROFILE_DETAILS = {
 }
 MOCK_ONT_PROFILES = tuple(MOCK_PROFILE_DETAILS)
 MOCK_SECURITY_PROFILES = {str(n) for n in range(1, 17)}
+
+# SIMULATION RULE, NOT A CALIX FACT. IDI's CMS R15.x docs say the outer VLAN is optional and is
+# left out "if the value is not required by Service Tag Action", but not which tag actions those
+# are: that is set up on each CMS. The simulation has two tag actions that take no outer VLAN, with
+# obviously fake names. Every other tag action (or none) needs one, and these two refuse one.
+MOCK_TAG_ACTIONS_NO_VLAN = ("MOCK-NO-VLAN-A", "MOCK-NO-VLAN-B")
 
 
 class MockOnt(NamedTuple):
@@ -103,10 +110,12 @@ class MockCmsBackend:
         for ont in MOCK_ONTS:
             # Everyone has data; every third subscriber also has voice on port 2
             services = [ProvisionedService(service_index=1, ont_port=1, vlan=100,
-                                           bandwidth_profile="RES-1G", tag_action="1")]
+                                           bandwidth_profile="RES-1G", tag_action="1",
+                                           us_pir_override="none", ds_pir_override="none")]
             if ont.ont_id % 3 == 0:
                 services.append(ProvisionedService(service_index=1, ont_port=2, vlan=200,
-                                                   bandwidth_profile="VOICE", tag_action="2"))
+                                                   bandwidth_profile="VOICE", tag_action="2",
+                                                   us_pir_override="none", ds_pir_override="none"))
             state = OntState(
                 ont_id=ont.ont_id, serial_number=ont.serial, model=ont.model, profile=ont.model,
                 admin_state="enabled", pon_port=ont.pon, description=ont.description,
@@ -120,7 +129,8 @@ class MockCmsBackend:
                 ont_id=ont_id, serial_number=f"CXNK00B{n:05X}", model="844G-1", profile="844G-1",
                 pon_port=pon, description=f"Bulk ONT {ont_id}", subscriber_id=f"SUB-{ont_id}",
                 services=[ProvisionedService(service_index=1, ont_port=1, vlan=100,
-                                             bandwidth_profile="RES-1G", tag_action="1")]),
+                                             bandwidth_profile="RES-1G", tag_action="1",
+                                             us_pir_override="none", ds_pir_override="none")]),
                 on_wire=True, online_at=0.0)
 
         for serial, model, pon in (("CXNK00C4D301", "844G-1", "1/1/1"),
@@ -182,18 +192,21 @@ class MockCmsBackend:
         ont = self._require(network, ont_id)
         attachment = Attachment(service.attach_to)
 
-        self._check_vlan(network, service.vlan)
+        self._check_tag_vlan(network, service.tag_action, service.vlan)
         self._check_port(ont, attachment, service.ont_port)
         name = port_name(attachment, service.ont_port)
         for existing in ont.state.services:
-            if (existing.vlan, existing.attachment, existing.ont_port) == (service.vlan, attachment, service.ont_port):
-                raise NbiConflictError(f"ONT {ont_id} port {name} already has a service on VLAN {service.vlan}.")
+            if existing.identity() == service.identity():
+                what = (f"VLAN {service.vlan}" if service.vlan is not None
+                        else f"tag action {service.tag_action} and no VLAN")
+                raise NbiConflictError(f"ONT {ont_id} port {name} already has a service on {what}.")
         on_port = [s.service_index for s in ont.state.services
                    if (s.attachment, s.ont_port) == (attachment, service.ont_port)]
         ont.state.services.append(ProvisionedService(
             service_index=max(on_port, default=0) + 1, ont_port=service.ont_port, attachment=attachment,
             vlan=service.vlan, bandwidth_profile=service.bandwidth_profile, tag_action=service.tag_action,
-            description=service.description))
+            description=service.description, us_pir_override=service.us_pir_override or "none",
+            ds_pir_override=service.ds_pir_override or "none"))
 
     async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts:
         await self._exchange(network)
@@ -239,10 +252,10 @@ class MockCmsBackend:
         if position is None:
             raise NbiNotFoundError(f"Service {service_index} on ONT {ont_id} port "
                                    f"{port_name(attachment, ont_port)} does not exist.")
-        if change.vlan is not None:
-            self._check_vlan(network, change.vlan)
         current = ont.state.services[position]
-        ont.state.services[position] = current.model_copy(update=change.model_dump(exclude_none=True))
+        updated = current.model_copy(update=change.model_dump(exclude_none=True))
+        self._check_tag_vlan(network, updated.tag_action, updated.vlan)
+        ont.state.services[position] = updated
 
     async def list_ont_profiles(self, network: str) -> List[OntProfile]:
         await self._exchange(network)
@@ -267,8 +280,7 @@ class MockCmsBackend:
         """Create a service at an explicit index, or merge new values into an existing one"""
         await self._exchange(network)
         ont = self._require(network, ont_id)
-        if service.vlan is not None:
-            self._check_vlan(network, service.vlan)
+        self._check_tag_vlan(network, service.tag_action, service.vlan)
         self._check_port(ont, service.attachment, service.ont_port)
         position = self._service_position(ont, service.ont_port, service.service_index, service.attachment)
         label = (f"Service {service.service_index} on ONT {ont_id} port "
@@ -318,7 +330,8 @@ class MockCmsBackend:
         self._onts[revlan].state.services[0].vlan = 300
         done.append(f"moved ONT {revlan} service 1 to VLAN 300")
         self._onts[stray].state.services.append(ProvisionedService(
-            service_index=9, ont_port=1, vlan=300, bandwidth_profile="RES-1G", tag_action="1"))
+            service_index=9, ont_port=1, vlan=300, bandwidth_profile="RES-1G", tag_action="1",
+            us_pir_override="none", ds_pir_override="none"))
         done.append(f"added a stray service to ONT {stray}")
         return done
 
@@ -365,6 +378,18 @@ class MockCmsBackend:
             raise NbiRejectedError(
                 f"VLAN {vlan} does not exist on {network}. "
                 f"Available VLANs: {', '.join(str(v) for v in MOCK_VLANS)}.")
+
+    @classmethod
+    def _check_tag_vlan(cls, network: str, tag_action: Optional[str], vlan: Optional[int]) -> None:
+        """The simulation's rule for which tag actions take an outer VLAN (MOCK_TAG_ACTIONS_NO_VLAN)"""
+        if tag_action in MOCK_TAG_ACTIONS_NO_VLAN:
+            if vlan is not None:
+                raise NbiRejectedError(f"Tag action {tag_action} takes no outer VLAN, but VLAN {vlan} was given.")
+            return
+        if vlan is None:
+            raise NbiRejectedError(f"Tag action {tag_action or '(none)'} needs an outer VLAN, and none was given. "
+                                   f"In the simulated CMS only tag actions {' and '.join(MOCK_TAG_ACTIONS_NO_VLAN)} take none.")
+        cls._check_vlan(network, vlan)
 
     @staticmethod
     def _check_port(ont: _MockOnt, attachment: Attachment, number: int) -> None:

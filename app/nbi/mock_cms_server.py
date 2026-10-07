@@ -23,6 +23,10 @@ Nothing here has been compared with a real CMS.
   - The router side (RG), and each Ethernet port's bridge/router mode, use the
     deliberately fake names in app/nbi/router_side.py:MOCK_RG_ADDRESSING.
     Calix's are not known.
+  - A service without an outer VLAN is created with no <out-tag> element and
+    read back as <out-tag>none</out-tag>, like <in-tag>. That a real CMS
+    answers "none" there is inferred. Which tag actions need an outer VLAN is
+    the simulation's own rule (MOCK_TAG_ACTIONS_NO_VLAN in app/nbi/mock_cms.py).
   - Paging is off unless MOCK_CMS_PAGE_SIZE is set. Then show-ont and every
     list of children answer that many items at a time, end with <more/> while
     there are more, and start after the item named by an <after> element. The
@@ -210,7 +214,9 @@ def _service_xml(ont_id: int, service: ProvisionedService) -> str:
         f"</svctagaction></id></tag-action>"
         f"<bw-prof><type>BwProf</type><id><bwprof>{escape(service.bandwidth_profile or '')}</bwprof></id></bw-prof>"
         f"<out-tag>{service.vlan if service.vlan is not None else 'none'}</out-tag>"
-        f"<in-tag>{service.inner_vlan if service.inner_vlan is not None else 'none'}</in-tag>")
+        f"<in-tag>{service.inner_vlan if service.inner_vlan is not None else 'none'}</in-tag>"
+        f"<us-pir-override>{escape(service.us_pir_override or 'none')}</us-pir-override>"
+        f"<ds-pir-override>{escape(service.ds_pir_override or 'none')}</ds-pir-override>")
 
 
 def _discovered_xml(ont: DiscoveredOnt) -> str:
@@ -487,7 +493,8 @@ async def _handle_edit(network: str, edit: ElementTree.Element) -> str:
                                                          "attachment": attachment}
             for field, path in (("admin_state", "./admin"), ("description", "./descr"),
                                 ("tag_action", "./tag-action/id/svctagaction"),
-                                ("bandwidth_profile", "./bw-prof/id/bwprof")):
+                                ("bandwidth_profile", "./bw-prof/id/bwprof"),
+                                ("us_pir_override", "./us-pir-override"), ("ds_pir_override", "./ds-pir-override")):
                 if _has(target, path):
                     base[field] = _text(target, path) or None
             if _has(target, "./out-tag"):
