@@ -14,7 +14,7 @@ When API_KEYS is not set:
   - otherwise every /api/v2 route answers 503 auth_not_configured. A real
     deployment cannot be left open by forgetting a variable.
 
-/api/v1 (rogue ONT detection, out of scope) and /health are not covered.
+/health and / are not covered, so probes need no key.
 Browsers' EventSource cannot set headers, so a browser following a job's SSE
 stream needs a server-side proxy that adds the key.
 """

@@ -1,9 +1,9 @@
 """
 Mock CMS
 An in-memory stand-in for the Calix CMS northbound interface, used when
-MOCK_MODE=true. It models one network, built from the same simulated ONTs
-as the mock E7-20 (app/controller/mock_e7.py), plus three ONTs that have
-been discovered on a PON but not provisioned yet.
+MOCK_MODE=true. It models one network of fourteen ONTs on two PONs
+(MOCK_ONTS below), plus three ONTs that have been discovered on a PON but
+not provisioned yet.
 
 It checks the things a real CMS would refuse (duplicate ONT IDs, serial
 numbers already in use, VLANs that do not exist) and can simulate an outage
@@ -15,9 +15,8 @@ rules are simplified.
 
 import asyncio
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
-from app.controller.mock_e7 import MOCK_ONTS
 from app.models.provisioning_model import (
     Attachment, DiscoveredOnt, EthernetService, OntPorts, OntProfile, OntSpec, OntState, OperState,
     PortChange, PortState, ProvisionedService, RouterState, ServiceChange, Vlan, port_name
@@ -39,6 +38,35 @@ MOCK_PROFILE_DETAILS = {
 }
 MOCK_ONT_PROFILES = tuple(MOCK_PROFILE_DETAILS)
 MOCK_SECURITY_PROFILES = {str(n) for n in range(1, 17)}
+
+
+class MockOnt(NamedTuple):
+    """One provisioned ONT in the simulated network"""
+    ont_id: int
+    pon: str  # shelf/card/port
+    serial: str
+    model: str  # also its ONT profile
+    description: str
+    online: bool = True
+
+
+# The simulated network. ONT 6 is unplugged, so it reads as offline.
+MOCK_ONTS = (
+    MockOnt(1, "1/1/1", "CXNK00A3F101", "716GE-I", "101 Alder St"),
+    MockOnt(2, "1/1/1", "CXNK00A3F102", "716GE-I", "105 Alder St"),
+    MockOnt(3, "1/1/1", "CXNK00A3F103", "844G-1", "112 Alder St"),
+    MockOnt(4, "1/1/1", "CXNK00A3F104", "844G-1", "118 Alder St"),
+    MockOnt(5, "1/1/1", "CXNK00A3F105", "716GE-I", "124 Alder St"),
+    MockOnt(6, "1/1/1", "CXNK00A3F106", "812G-1", "131 Alder St", online=False),
+    MockOnt(7, "1/1/1", "CXNK00A3F107", "844G-1", "137 Alder St"),
+    MockOnt(8, "1/1/1", "CXNK00A3F108", "716GE-I", "140 Alder St"),
+    MockOnt(9, "1/1/2", "CXNK00B7C209", "716GE-I", "12 Birch Ave"),
+    MockOnt(10, "1/1/2", "CXNK00B7C210", "844G-1", "18 Birch Ave"),
+    MockOnt(11, "1/1/2", "CXNK00B7C211", "716GE-I", "25 Birch Ave"),
+    MockOnt(12, "1/1/2", "CXNK00B7C212", "812G-1", "31 Birch Ave"),
+    MockOnt(13, "1/1/2", "CXNK00B7C213", "716GE-I", "40 Birch Ave"),
+    MockOnt(14, "1/1/2", "CXNK00B7C214", "844G-1", "46 Birch Ave"),
+)
 
 
 def _new_port() -> Dict[str, Any]:
@@ -81,7 +109,7 @@ class MockCmsBackend:
                                                    bandwidth_profile="VOICE", tag_action="2"))
             state = OntState(
                 ont_id=ont.ont_id, serial_number=ont.serial, model=ont.model, profile=ont.model,
-                admin_state=ont.admin, pon_port=ont.pon, description=ont.description,
+                admin_state="enabled", pon_port=ont.pon, description=ont.description,
                 subscriber_id=f"SUB-{1000 + ont.ont_id}", services=services)
             self._onts[ont.ont_id] = _MockOnt(state, on_wire=ont.online, online_at=0.0)
 
@@ -180,7 +208,8 @@ class MockCmsBackend:
                 default_to_rg=profile.default_to_rg if profile else None,
                 ports=[PortState(port=port_name(Attachment.ROUTER, n), attachment=Attachment.ROUTER, number=n,
                                  **values) for n, values in sorted(ont.router_ports.items())],
-                services=sum(1 for s in ont.state.services if s.attachment == Attachment.ROUTER)))
+                services=sum(1 for s in ont.state.services if s.attachment == Attachment.ROUTER)),
+            voice_ports=profile.pots_ports if profile else None)
 
     async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,
                           change: PortChange) -> None:

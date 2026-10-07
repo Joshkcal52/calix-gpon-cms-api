@@ -3,10 +3,10 @@
 Nothing here touches real hardware. CMS is the mock NBI server from this repository, and "the XGS side" is a listener that prints what it receives.
 
 ```
- curl ──▶ api ──▶ Kafka: legacy-gpon-events, rogue.commands.provisioning ──▶ worker ──SOAP──▶ mock-cms
-           ▲                                                                  │
-           └──── Kafka: rogue.job-updates ◀───────────────────────────────────┤
-                                                                              └──▶ Kafka: xgs-migration-requests ──▶ xgs-listener
+ curl ──▶ api ──▶ Kafka: legacy-gpon-events, gpon-cms.commands.provisioning ──▶ worker ──SOAP──▶ mock-cms
+           ▲                                                                     │
+           └──── Kafka: gpon-cms.job-updates ◀───────────────────────────────────┤
+                                                                                 └──▶ Kafka: xgs-migration-requests ──▶ xgs-listener
 ```
 
 The quickest path needs neither Docker nor Kafka: `MOCK_MODE=true python main.py`, as in `HANDOFF.md`. This page is for the multi-process topology.
@@ -45,7 +45,8 @@ curl -N -H "$KEY" $API/api/v2/jobs/<job id>/events
 curl -H "$KEY" $API/api/v2/networks/$NET/onts/15/ports
 curl -H "$KEY" -X POST $API/api/v2/networks/$NET/onts/15/ports/rg1/services/1/disable
 
-# 5. Export PON 1/1/1 for a cutover, and plan the SMx requests (dry run, nothing is sent)
+# 5. Export PON 1/1/1 for a cutover, and plan the SMx requests (dry run, nothing is sent).
+#    Voice is not exported: the voice column reads "not checked" for every ONT that has voice ports.
 curl -H "$KEY" "$API/api/v2/networks/$NET/export?pon=1/1/1&format=csv" > pon-1-1-1.csv
 curl -H "$KEY" $API/api/v2/networks/$NET/subscribers/SUB-1003/smx-plan
 

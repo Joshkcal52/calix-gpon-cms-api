@@ -1,20 +1,21 @@
 """
-Rogue ONT Detection API
-A FastAPI application for detecting rogue ONTs on Calix E7-20 GPON systems.
+gpon-cms
+A provisioning API for legacy Calix GPON through CMS (R15.x, SOAP over HTTP).
 """
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import asyncio
 import uvicorn
-from typing import Dict, Any
+from typing import Dict, List
 import logging
 
 # Import routes
-from app.routes import ssh_routes, ont_routes, hp_routes
-from app.routes import provisioning_routes, job_routes, legacy_routes, lifecycle_routes, cutover_routes
+from app.routes import (
+    provisioning_routes, job_routes, legacy_routes, lifecycle_routes, cutover_routes, status_routes
+)
 
 # Import services for the v2 integration layer
 from app.auth import ApiAuthError, check_configuration, require_api_key
@@ -87,21 +88,36 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware to allow cross-origin requests
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-# Include routers
-app.include_router(ssh_routes.router)
-app.include_router(ont_routes.router)
-app.include_router(hp_routes.router)
+def cors_origins(value: str) -> List[str]:
+    """CORS_ALLOW_ORIGINS, comma-separated, as a list. Empty: no origin is allowed."""
+    origins = [origin.strip() for origin in (value or "").split(",") if origin.strip()]
+    if "*" in origins:
+        raise ValueError("CORS_ALLOW_ORIGINS must list each origin; '*' is not accepted")
+    return origins
+
+
+def configure_cors(app: FastAPI, value: str) -> None:
+    """
+    Allow browser pages from the listed origins to call the API. With none
+    listed, no CORS headers are sent and browsers block cross-origin calls.
+    The API key travels in a header, so cookies (credentials) are not allowed.
+    """
+    origins = cors_origins(value)
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
+            allow_headers=["Authorization", "X-API-Key", "Content-Type", "Last-Event-ID"],
+        )
+
+
+configure_cors(app, settings.cors_allow_origins)
+
 # Every /api/v2 route needs an API key (app/auth.py)
-for v2 in (provisioning_routes, legacy_routes, lifecycle_routes, cutover_routes, job_routes):
+for v2 in (provisioning_routes, legacy_routes, lifecycle_routes, cutover_routes, job_routes, status_routes):
     app.include_router(v2.router, dependencies=[Depends(require_api_key)])
 
 
@@ -137,11 +153,9 @@ async def root() -> Dict[str, str]:
     Root endpoint - provides basic API information
     """
     return {
-        "message": "Rogue ONT Detection API",
+        "message": "gpon-cms: provisioning API for Calix CMS",
         "version": settings.api_version,
-        "status": "running",
-        "target_platform": settings.target_platform,
-        "cms_version": settings.cms_version
+        "docs": "/docs",
     }
 
 
@@ -152,34 +166,12 @@ async def health_check() -> Dict[str, str]:
     """
     return {"status": "healthy"}
 
-
-@app.get("/api/v1/status")
-async def api_status() -> Dict[str, Any]:
-    """
-    API status endpoint - provides detailed status information
-    """
-    return {
-        "api_version": settings.api_version,
-        "status": "operational",
-        "mock_mode": settings.mock_mode,
-        "queue": "kafka" if settings.kafka_bootstrap_servers else "in-memory",
-        "target_platform": settings.target_platform,
-        "cms_version": settings.cms_version,
-        "endpoints": {
-            "ssh_management": "/api/v1/ssh",
-            "ont_management": "/api/v1/onts",
-            "provisioning": "/api/v2/networks/{network}",
-            "jobs": "/api/v2/jobs",
-            "documentation": "/docs"
-        }
-    }
-
 # This allows us to run the app directly with: python main.py
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host=settings.host,
         port=settings.port,
-        reload=settings.reload,  # Auto-reload on code changes (development only)
+        reload=settings.reload,  # RELOAD=true restarts on code changes (development only)
         log_level=settings.log_level.lower()
     )

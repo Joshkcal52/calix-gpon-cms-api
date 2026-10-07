@@ -1,4 +1,4 @@
-# GPON Provisioning API for Calix CMS
+# gpon-cms: a provisioning API for Calix CMS
 
 A REST and Kafka front end for legacy Calix GPON. What the SMx API is for the newer network, this is for CMS: a billing system or portal makes one call when a customer signs up, and the configuration is pushed to the ONT through the CMS northbound interface (R15.x, SOAP over HTTP). No screen-scraping and nobody typing into CMS.
 
@@ -11,7 +11,7 @@ It also covers the rest of an ONT's life (suspend, restore, change, disconnect) 
 - **Provisions an ONT piece by piece.** CMS has no single "set up this customer" command and its API cannot apply a port template, so the ONT, each Ethernet port and each service are sent as separate requests, in order. If CMS rejects a step, the ONT created in that run is removed again.
 - **Runs the lifecycle as jobs that are safe to repeat.** Enable or disable a port or a service, change a service's bandwidth profile, tag action or VLAN, delete a service, delete an ONT. Each change answers `202` with a job you can poll or follow live.
 - **Handles ONTs with a built-in router, such as the 844G.** Each Ethernet port is either a plain bridge or belongs to the router. The mode is read from CMS for every port and never assumed from the ONT model.
-- **Exports for cutovers.** One PON port, one card or a whole network, as CSV and JSON laid out for SMx, with the existing serial numbers carried over and blank columns for what only the new side knows. Router-capable ONTs running as bridges are flagged.
+- **Exports for cutovers.** One PON port, one card or a whole network, as CSV and JSON laid out for SMx, with the existing serial numbers carried over and blank columns for what only the new side knows. Router-capable ONTs running as bridges are flagged. **Voice is not exported** (see below): every ONT with voice ports is marked `voice: not checked`.
 - **Plans the SMx requests as a dry run.** Nothing is sent to SMx. A profile with no mapping fails that subscriber with a message; nothing is guessed.
 - **Compares a saved snapshot with CMS**, read-only, to show what has changed.
 - **Checks a real CMS without changing it.** One command logs in, reads, logs out, and reports what it understood.
@@ -68,7 +68,21 @@ All routes are under `/api/v2`. Changes answer `202 Accepted` with a job; reads 
 | Jobs | `GET /jobs/`, `GET /jobs/{job_id}`, `GET /jobs/{job_id}/events` (Server-Sent Events) |
 | Health | `GET /nbi/health` (CMS backend and circuit breaker) |
 
-Ports are named `eth1` to `eth8` for Ethernet ports and `rg1` for the router side.
+Ports are named `eth1` to `eth8` for Ethernet ports and `rg1` for the router side. `GET /api/v2/status` reports the mode, queue and CMS backend in use; `GET /health` is open, without a key, for probes.
+
+## What it does not do: voice
+
+Only Ethernet data services are read from CMS. Voice (POTS ports and their services) is not provisioned, exported or planned. So that a cutover sheet never looks complete when it is not, every export record and every SMx plan carries a `voice` status:
+
+| `voice` | Meaning |
+|---|---|
+| `not checked` | The ONT's profile has voice ports. Their service was not read: check it by hand. |
+| `unknown` | The voice port count could not be read (the ONT or its ports could not be read, ports were skipped, or the profile has no count). Check by hand. |
+| `none` | The profile has no voice ports. |
+
+It is the second column of the services CSV. The export and the plan count the first two (`voice_not_checked`), and the command-line tools print that count. The SMx plan's `ready` covers data services only.
+
+The `XGS_CUTOVER` event (`POST /networks/{network}/cutovers`) does not carry voice either, and its migration request has no voice flag yet.
 
 ## Command-line tools
 
@@ -99,6 +113,7 @@ Before the first change on a real CMS, know that:
 
 - **CMS traffic is unencrypted.** The CMS client library only speaks plain HTTP on port 18080.
 - **Router-side support is switched off until configured.** How CMS addresses the router side of ONTs such as the 844G is not known here. Until the four `CMS_RG_*` settings are filled in from a real CMS, router-side changes are refused and port modes read as `unknown`. The read-only check prints what to set; details are in `app/nbi/router_side.py`.
+- **Voice is not handled.** See "What it does not do: voice" above.
 - **CMS expects database IDs, not names**, for profiles and tag actions, and network names in the form `NTWK-...`.
 - **The mapping files hold demo values.** Replace `app/legacy/profile_map.yml` and `app/legacy/smx_map.yml` with your own.
 
@@ -111,8 +126,11 @@ Settings come from environment variables or a `.env` file. `env_example.txt` has
 | `MOCK_MODE` | `true` uses the simulated CMS. Nothing real is touched. |
 | `CMS_HOST`, `CMS_PORT`, `CMS_USERNAME`, `CMS_PASSWORD` | The real CMS. Ignored when `MOCK_MODE` is on. |
 | `API_KEYS` | Comma-separated keys (or `name:key`) required on every `/api/v2` route. Optional only in mock mode. |
+| `CORS_ALLOW_ORIGINS` | Browser origins allowed to call the API, comma-separated. Empty (the default) allows none. |
+| `RELOAD` | `true` restarts `python main.py` on code changes. Off by default. |
 | `KAFKA_BOOTSTRAP_SERVERS` | Set to queue work in Kafka. Empty queues inside the API process. |
 | `WORKER_LANES` | Which queues a worker serves: `provisioning`, `legacy`. |
+| `KAFKA_TOPIC_PREFIX` | Prefix of the command and job-update topics. Default `gpon-cms`. |
 | `LEGACY_EVENTS_TOPIC`, `XGS_MIGRATION_TOPIC` | Topic for signup and cutover events in, and migration requests out. |
 | `CMS_RG_*` | Router-side addressing, set from a real CMS. |
 | `NBI_TIMEOUT_SECONDS`, `NBI_BREAKER_*` | Timeout and circuit breaker for CMS calls. |
@@ -130,7 +148,7 @@ WORKER_LANES=legacy,provisioning python -m app.worker
 Workers commit a Kafka offset only once a command has succeeded or its failure has been recorded, so a worker that dies mid-job loses nothing. Producers other than the API can write signup and cutover events straight to the events topic.
 
 - A demo with Kafka, the API, a worker and a mock CMS server: [deploy/demo/README.md](deploy/demo/README.md)
-- Container image and Kubernetes manifests: `deploy/`. They have not been built or applied yet.
+- Container image and Kubernetes manifests: `deploy/Dockerfile` and `deploy/k8s/gpon-cms.yaml`. They have not been built or applied yet.
 
 ## Tests
 
@@ -139,7 +157,7 @@ pip install -r requirements-test.txt
 pytest
 ```
 
-130 tests. They run every CMS operation through the real client library over SOAP against the mock CMS server, and the queue rules over the Kafka wire protocol against an in-process Kafka mock.
+Run on Python 3.10 and 3.12. The tests run every CMS operation through the real client library over SOAP against the mock CMS server, and the queue rules over the Kafka wire protocol against an in-process Kafka mock.
 
 ## Project layout
 

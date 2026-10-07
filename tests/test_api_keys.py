@@ -49,12 +49,22 @@ def test_every_v2_route_refuses_a_request_without_a_valid_key(keyed):
     assert keyed.app.state.jobs.list() == []  # nothing was queued
 
 
-def test_a_valid_key_works_in_either_header_and_v1_and_health_stay_open(keyed):
+def test_a_valid_key_works_in_either_header_and_health_stays_open(keyed):
     assert keyed.get(f"/api/v2/networks/{MOCK_NETWORK}/vlans", headers={"X-API-Key": PORTAL}).status_code == 200
     assert keyed.get(f"/api/v2/networks/{MOCK_NETWORK}/vlans",
                      headers={"Authorization": f"Bearer {NOC}"}).status_code == 200
     assert keyed.get("/health").status_code == 200
-    assert keyed.get("/api/v1/status").status_code == 200
+    assert keyed.get("/api/v2/status").status_code == 401
+    status = keyed.get("/api/v2/status", headers={"X-API-Key": PORTAL})
+    assert status.status_code == 200 and status.json()["mock_mode"] is True
+
+
+def test_the_old_ssh_and_cli_routes_are_gone(keyed):
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert not [p for p in paths if p.startswith("/api/v1")]
+    for method, path in (("POST", "/api/v1/ssh/connect"), ("POST", "/api/v1/ssh/command"),
+                         ("GET", "/api/v1/status"), ("GET", "/api/v1/onts/"), ("GET", "/api/v1/hp/interfaces")):
+        assert keyed.request(method, path, json={"command": "show version"}).status_code == 404, path
 
 
 def test_a_queued_job_can_be_followed_with_the_key(keyed):

@@ -1,5 +1,5 @@
 """
-Configuration settings for the Rogue ONT Detection API
+Configuration settings for gpon-cms
 """
 
 import os
@@ -14,28 +14,25 @@ class Settings(BaseSettings):
     """
 
     # API Settings
-    api_title: str = "Rogue ONT Detection API"
+    api_title: str = "gpon-cms"
     api_version: str = "1.0.0"
-    api_description: str = "API for detecting rogue ONTs on Calix E7-20 GPON systems"
+    api_description: str = "Provisioning API for legacy Calix GPON through CMS (R15.x NBI)"
 
-    # Server Settings
+    # Server Settings (python main.py)
     host: str = "0.0.0.0"
     port: int = 8000
-    reload: bool = True  # Set to False in production
+    reload: bool = False  # RELOAD=true restarts on code changes; development only
 
-    # SSH Settings for Calix E7-20
-    ssh_host: Optional[str] = None
-    ssh_port: int = 22
-    ssh_username: str = "admin"
-    ssh_password: Optional[str] = None
-    ssh_timeout: int = 30
+    # Browser origins allowed to call the API (CORS), comma-separated, e.g.
+    # https://portal.example.internal. Empty (the default) allows none.
+    cors_allow_origins: str = ""
 
     # API keys for every /api/v2 route, comma-separated. Each entry is a key, or name:key
     # (the name is logged with each request). See app/auth.py.
     api_keys: Optional[str] = None
 
-    # Mock mode: simulate the E7-20 instead of opening an SSH connection.
-    # For development without lab hardware. Set MOCK_MODE=true in .env
+    # Mock mode: use the simulated CMS (app/nbi/mock_cms.py) instead of a real one.
+    # For development without CMS access. Set MOCK_MODE=true in .env
     mock_mode: bool = False
 
     # --- CMS northbound interface (the fast lane) ---
@@ -64,7 +61,7 @@ class Settings(BaseSettings):
     # Leave empty to queue inside the API process (single process, nothing
     # survives a restart). Set to use Kafka, e.g. KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     kafka_bootstrap_servers: Optional[str] = None
-    kafka_topic_prefix: str = "rogue"
+    kafka_topic_prefix: str = "gpon-cms"
     # Must be longer than the slowest command, or Kafka takes the partition away mid-task
     kafka_max_poll_interval_seconds: float = 900.0
     kafka_session_timeout_seconds: float = 30.0  # how long before a dead worker's work is reassigned

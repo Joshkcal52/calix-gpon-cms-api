@@ -6,7 +6,7 @@
 #
 # NOT YET RUN: this file was written without access to Docker. The same four
 # processes were run and tested directly (see README.md, "Without Docker").
-name: gpon-legacy-demo
+name: gpon-cms-demo
 
 x-app: &app
   build:

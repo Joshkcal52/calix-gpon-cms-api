@@ -1,7 +1,7 @@
 # One image for the API, the workers, the mock CMS and the command-line tools
 # (export, snapshot compare, SMx plan, read-only CMS check); the command
 # decides which it runs.
-#   docker build -f deploy/Dockerfile -t gpon-legacy-api .
+#   docker build -f deploy/Dockerfile -t gpon-cms .
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -13,8 +13,8 @@ COPY main.py config.py ./
 COPY app ./app
 COPY deploy/demo ./deploy/demo
 
-RUN useradd --create-home rogue
-USER rogue
+RUN useradd --create-home gpon-cms
+USER gpon-cms
 
 EXPOSE 8000
 # API by default. Workers override this with: python -m app.worker

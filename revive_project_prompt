@@ -1,5 +1,0 @@
-Here is my current `ssh_service.py` file from my Rogue ONT Detection FastAPI project. I do not have access to a real Calix E7-20 chassis to test against. 
-
-Can you rewrite this service file to include a `MOCK_MODE` configuration check? If `MOCK_MODE` is true, instead of opening a real network socket, intercept the `execute_command` method and return mock text data matching standard Calix E7 CLI outputs for commands like "show ont status" or "show interface gpon". 
-
-Ensure it still integrates perfectly with my existing project structure.

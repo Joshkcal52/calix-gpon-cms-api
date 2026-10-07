@@ -73,7 +73,7 @@ OBSERVED_FIELDS: Dict[str, tuple] = {
     "Ont": ("op-stat", "admin"),
     "EthSvc": ("admin", "out-tag", "in-tag"),
     "OntEthGe": ("admin",),
-    "OntProf": ("geth", "rg", "default-to-rg"),
+    "OntProf": ("geth", "pots", "rg", "default-to-rg"),
 }
 
 # Every reply field the code knows by name: the ones it reads, plus the ones the
@@ -436,7 +436,8 @@ class CmsNbiClientBackend:
                 router.note = ((router.note + " ") if router.note else "") + (
                     f"{len(unknown)} service(s) are in ONT slot(s) {', '.join(slots)}, which this code does not "
                     f"recognise. They may be on the router side; nothing is assumed.")
-            return OntPorts(network=network, ont_id=ont_id, profile=profile_id, ethernet=ethernet, router=router)
+            return OntPorts(network=network, ont_id=ont_id, profile=profile_id, ethernet=ethernet, router=router,
+                            voice_ports=profile.pots_ports if profile else None)
         return await self._run(work)
 
     async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,

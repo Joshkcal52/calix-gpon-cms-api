@@ -8,7 +8,9 @@ CMS provisions object by object: the ONT, each Ethernet port and each service ar
 
 Around that core sit the cutover tools: an export of a network in SMx's terms, a dry-run plan of the SMx requests, snapshots with a read-only compare, and a read-only check for a real CMS.
 
-This document covers `/api/v2`. The `/api/v1` routes (SSH and CLI scraping for rogue ONT detection) are older, separate and out of scope.
+Every route is under `/api/v2` and needs an API key, except `/` and `/health`. The project's earlier `/api/v1` routes (SSH and CLI scraping) have been removed.
+
+**Voice is out of scope.** Only Ethernet data services are read, provisioned, exported or planned. The cutover tools say so on every record rather than leaving it out silently (see "Cutover tools").
 
 ## The shape
 
@@ -32,7 +34,7 @@ This document covers `/api/v2`. The `/api/v1` routes (SSH and CLI scraping for r
 
 | Part | Owns | Never does |
 |---|---|---|
-| **FastAPI** (`main.py`, `app/routes/`) | API keys. Validating every request with Pydantic. Answering reads. Writing commands to the bus and answering `202`. Serving job status and the SSE stream. | Executing a queued change itself. |
+| **FastAPI** (`main.py`, `app/routes/`) | API keys. CORS (no origin allowed unless `CORS_ALLOW_ORIGINS` lists it). Validating every request with Pydantic. Answering reads. Writing commands to the bus and answering `202`. Serving job status and the SSE stream. | Executing a queued change itself. |
 | **NBI gateway** (`app/nbi/gateway.py`) | Every call to CMS: timeout, read retries, circuit breaker, concurrency cap, typed errors. | Business logic. It runs one CMS operation per call. |
 | **CMS backend** (`app/nbi/cms_client_backend.py`) | Turning one operation into one SOAP exchange through `cms-nbi-client`, and replies into models. Recording reply fields it does not recognise. | Retries or policy. |
 | **Router side** (`app/nbi/router_side.py`) | Everything about the router (RG) side of an ONT that is not known: how router-side services and ports are addressed, and how a port's bridge/router mode appears. | Guessing. Unconfigured pieces are refused or read as "unknown". |
@@ -82,8 +84,8 @@ What is and is not known about the router side, and the four settings that confi
 
 ## Cutover tools (read-only)
 
-- **Export** (`app/legacy/export.py`, `GET /networks/{network}/export`, `python -m app.legacy.export`): a network, a card or a PON port, one record per ONT laid out as SMx thinks of it (subscriber, ONT, data services), as JSON, a services CSV, a ports CSV and a snapshot. The existing serial number and registration ID are carried over because the ONT may be kept. Columns starting `fill_in_` are left blank: the new OLT and PON port, a replacement serial if the ONT is swapped, the customer's name and address.
-- **SMx plan** (`app/legacy/smx.py`, `POST /smx/plans`, `GET .../subscribers/{id}/smx-plan`, `python -m app.legacy.smx`): from an export or a filled-in CSV, the Create/Update Subscriber, ONT and Data Service requests that would recreate each subscriber. A mapping file (`app/legacy/smx_map.yml`, `SMX_MAP_PATH`) translates ONT profiles, bandwidth profiles, tag actions, ports, port modes and admin states. An unmapped value fails that subscriber only, with a message naming it. Nothing is sent. Parameter names follow the IDI billing SMx R24.x docs; SMx's own API format is not known here.
+- **Export** (`app/legacy/export.py`, `GET /networks/{network}/export`, `python -m app.legacy.export`): a network, a card or a PON port, one record per ONT laid out as SMx thinks of it (subscriber, ONT, data services), as JSON, a services CSV, a ports CSV and a snapshot. The existing serial number and registration ID are carried over because the ONT may be kept. Columns starting `fill_in_` are left blank: the new OLT and PON port, a replacement serial if the ONT is swapped, the customer's name and address. Voice is not exported, so every record has a `voice` status (the second CSV column): `not checked` when the ONT profile has voice (POTS) ports, `unknown` when that count could not be read, `none` only when the profile has none. A CSV read back without a status reads as `unknown`, and a status that contradicts `legacy_voice_ports` is refused.
+- **SMx plan** (`app/legacy/smx.py`, `POST /smx/plans`, `GET .../subscribers/{id}/smx-plan`, `python -m app.legacy.smx`): from an export or a filled-in CSV, the Create/Update Subscriber, ONT and Data Service requests that would recreate each subscriber. A mapping file (`app/legacy/smx_map.yml`, `SMX_MAP_PATH`) translates ONT profiles, bandwidth profiles, tag actions, ports, port modes and admin states. An unmapped value fails that subscriber only, with a message naming it. Each subscriber's plan carries the export's `voice` status, the plan counts those not `none` under `voice_not_checked`, and `ready` covers data services only. Nothing is sent. Parameter names follow the IDI billing SMx R24.x docs; SMx's own API format is not known here.
 - **Snapshots and compare** (`app/legacy/snapshot.py`): a snapshot is YAML built from the export. `--compare FILE` (or `POST /networks/{network}/snapshot-compare`) lists ONTs gone, ONTs new and every changed field, port and service between the snapshot and CMS now. There is no restore.
 - **Read-only CMS check** (`python -m app.tools.cms_check`): logs in, lists ONTs, reads one ONT with services and ports, reads profiles and VLANs, logs out. It prints what it understood, every reply field it did not recognise, the raw values of fields whose meaning is inferred, and every service ONT slot it saw. A guard on the HTTP layer refuses anything but login, logout and reads. `--dump` saves every request and reply with the password blanked.
 
@@ -103,9 +105,9 @@ Kafka topics, with the default prefix:
 |---|---|---|
 | `legacy-gpon-events` | network name | signup and cutover events, as plain event JSON |
 | `xgs-migration-requests` | subscriber ID | produced by cutovers for the XGS side |
-| `rogue.commands.provisioning` | network name | ONT activations and lifecycle changes |
-| `rogue.commands.dlq` | original key | commands that failed for good, with the reason in headers |
-| `rogue.job-updates` | job id | progress, read by every API process |
+| `gpon-cms.commands.provisioning` | network name | ONT activations and lifecycle changes |
+| `gpon-cms.commands.dlq` | original key | commands that failed for good, with the reason in headers |
+| `gpon-cms.job-updates` | job id | progress, read by every API process |
 
 Auto-commit is off. For each command a worker does exactly one of these:
 
@@ -149,7 +151,7 @@ Every CMS failure reaches the client, or the failed job, in one shape:
 |---|---|---|
 | Single process | `MOCK_MODE=true python main.py` | Development. In-process queue, embedded worker, simulated CMS. No API key needed. Jobs are lost on restart. |
 | Demo topology | `deploy/demo/` (Docker Compose, or four local processes) | Kafka, API, worker, mock CMS NBI server and a stand-in XGS listener. |
-| Production shape | API: `uvicorn main:app`. Workers: `WORKER_LANES=provisioning` and `WORKER_LANES=legacy python -m app.worker`. `CMS_HOST` and `API_KEYS` set. | See `deploy/k8s/rogue-api.yaml`. |
+| Production shape | API: `uvicorn main:app`. Workers: `WORKER_LANES=provisioning` and `WORKER_LANES=legacy python -m app.worker`. `CMS_HOST` and `API_KEYS` set. | See `deploy/k8s/gpon-cms.yaml`. |
 
 ## The CMS client: cms-nbi-client 0.1.0
 
@@ -177,11 +179,13 @@ Verified by the test suite (`requirements-test.txt`, run on Python 3.10 and 3.12
 - The worker's acknowledgement rules, on the in-process bus and over the real Kafka wire protocol against librdkafka's mock cluster, including a worker killed with SIGKILL mid-job.
 - Every CMS operation through `cms-nbi-client` 0.1.0 over SOAP against the mock NBI server: ONTs, Ethernet ports, router-side services and ports (with the mock's fake addressing), service update and delete, profiles, VLANs, session expiry, timeouts.
 - Activation, signup, every lifecycle change run twice, rollback of a new ONT, export (JSON, CSV, card and PON scope), the SMx plan from a filled-in CSV, snapshot compare, and the read-only check (including that it sends no edit and blanks the password in dumps).
+- The voice status on every export record and plan, including `unknown` for an ONT, ports or profile count that could not be read.
 
 Inferred, not verified, because nobody on this project has a real CMS:
 
 - **Every reply field the library does not parse**: `op-stat` values, `linked-pon`, `reg-id`, the `rpc-error` tags, the expired-session signal, the serial-number short form, the element names in an Ethernet port (OntEthGe) reply, and the meaning of OntProf values (port counts, `true`/`false`).
 - **The router side and port modes**: not known at all; see `app/nbi/router_side.py`.
+- **The voice port count**: read from the OntProf `pots` attribute. That it is a count of voice ports is inferred.
 - **The IDI docs say "the Calix API expects 200 + the port number" for Ethernet ports** (port 1 as 201). The library uses plain port numbers. Which one your CMS wants is unknown; `cms_check` prints the port IDs of real services.
 - The SMx parameter names (taken from the IDI docs, not from SMx) and every entry in `smx_map.yml` and `profile_map.yml`, which are demo values.
 - Apache Kafka itself (only the mock cluster), Docker and Kubernetes (written, parsed, never run).

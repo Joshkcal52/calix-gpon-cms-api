@@ -193,6 +193,9 @@ class OntPorts(BaseModel):
     profile: Optional[str] = None
     ethernet: List[PortState]
     router: RouterState
+    voice_ports: Optional[int] = Field(
+        None, description="Voice (POTS) port count from the ONT profile's pots attribute. None if it could not "
+                          "be read. Voice services themselves are not read by this API")
 
 
 class OntProfile(BaseModel):
