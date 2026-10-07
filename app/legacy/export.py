@@ -130,6 +130,9 @@ class ExportService(BaseModel):
     c_vlan: Optional[int] = Field(None, description="Inner tag on CMS")
     bandwidth_profile: Optional[str] = None
     tag_action: Optional[str] = None
+    us_pir_override: Optional[str] = Field(None, description='Upstream peak rate override on CMS, e.g. "100m" or '
+                                                             '"none"')
+    ds_pir_override: Optional[str] = Field(None, description="Downstream peak rate override on CMS")
     admin_state: str = "enabled"
     description: Optional[str] = None
 
@@ -205,6 +208,7 @@ def _service(service: ProvisionedService, modes: Dict[str, str]) -> ExportServic
         port_mode=mode,
         service_index=service.service_index, vlan=service.vlan, c_vlan=service.inner_vlan,
         bandwidth_profile=service.bandwidth_profile, tag_action=service.tag_action,
+        us_pir_override=service.us_pir_override, ds_pir_override=service.ds_pir_override,
         admin_state=service.admin_state, description=service.description)
 
 
@@ -297,6 +301,7 @@ SERVICE_COLUMNS = (
         "legacy_voice_ports",
         "service_legacy_port", "service_attachment", "service_ont_slot", "service_port_mode", "service_index",
         "service_vlan", "service_c_vlan", "service_bandwidth_profile", "service_tag_action",
+        "service_us_pir_override", "service_ds_pir_override",
         "service_admin_state", "service_description", "notes"))
 PORT_COLUMNS = ("legacy_network", "legacy_ont_id", "account_number", "port", "attachment", "mode", "admin_state",
                 "subscriber_id", "security_profile", "description")
@@ -440,6 +445,8 @@ def from_services_csv(text: str) -> CutoverExport:
                     vlan=number(row, "service_vlan"), c_vlan=number(row, "service_c_vlan"),
                     bandwidth_profile=value(row, "service_bandwidth_profile"),
                     tag_action=value(row, "service_tag_action"),
+                    us_pir_override=value(row, "service_us_pir_override"),
+                    ds_pir_override=value(row, "service_ds_pir_override"),
                     admin_state=value(row, "service_admin_state") or "enabled",
                     description=value(row, "service_description")))
         except (TypeError, ValueError) as e:

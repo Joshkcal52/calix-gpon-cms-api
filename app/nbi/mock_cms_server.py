@@ -214,7 +214,9 @@ def _service_xml(ont_id: int, service: ProvisionedService) -> str:
         f"</svctagaction></id></tag-action>"
         f"<bw-prof><type>BwProf</type><id><bwprof>{escape(service.bandwidth_profile or '')}</bwprof></id></bw-prof>"
         f"<out-tag>{service.vlan if service.vlan is not None else 'none'}</out-tag>"
-        f"<in-tag>{service.inner_vlan if service.inner_vlan is not None else 'none'}</in-tag>")
+        f"<in-tag>{service.inner_vlan if service.inner_vlan is not None else 'none'}</in-tag>"
+        f"<us-pir-override>{escape(service.us_pir_override or 'none')}</us-pir-override>"
+        f"<ds-pir-override>{escape(service.ds_pir_override or 'none')}</ds-pir-override>")
 
 
 def _discovered_xml(ont: DiscoveredOnt) -> str:
@@ -491,7 +493,8 @@ async def _handle_edit(network: str, edit: ElementTree.Element) -> str:
                                                          "attachment": attachment}
             for field, path in (("admin_state", "./admin"), ("description", "./descr"),
                                 ("tag_action", "./tag-action/id/svctagaction"),
-                                ("bandwidth_profile", "./bw-prof/id/bwprof")):
+                                ("bandwidth_profile", "./bw-prof/id/bwprof"),
+                                ("us_pir_override", "./us-pir-override"), ("ds_pir_override", "./ds-pir-override")):
                 if _has(target, path):
                     base[field] = _text(target, path) or None
             if _has(target, "./out-tag"):

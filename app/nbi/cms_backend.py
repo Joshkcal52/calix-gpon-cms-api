@@ -53,9 +53,9 @@ ONT_DEFAULTS = ("<pwe3prof><type>OntPwe3Prof</type><id><ontpwe3prof>1</ontpwe3pr
                 "<us-sdber-rate>5</us-sdber-rate><low-rx-opt-pwr-ne-thresh>-30.0</low-rx-opt-pwr-ne-thresh>"
                 "<high-rx-opt-pwr-ne-thresh>-7.0</high-rx-opt-pwr-ne-thresh><battery-present>false</battery-present>"
                 "<pse-max-power-budget>30</pse-max-power-budget><poe-class-control>disabled</poe-class-control>")
+# The peak-rate overrides are "none" unless the service sets them
 SERVICE_DEFAULTS = ("<in-tag>none</in-tag><mcast-prof></mcast-prof><pon-cos>derived</pon-cos>"
-                    "<us-cir-override>none</us-cir-override><us-pir-override>none</us-pir-override>"
-                    "<ds-pir-override>none</ds-pir-override><hot-swap>false</hot-swap>"
+                    "<us-cir-override>none</us-cir-override>{us_pir}{ds_pir}<hot-swap>false</hot-swap>"
                     "<pppoe-force-discard>false</pppoe-force-discard>")
 
 ONT_SLOT = "3"  # Gigabit Ethernet, per cms-nbi-client's documentation (4 is HPNA, 5 is Fast Ethernet)
@@ -64,7 +64,7 @@ ONT_SLOT = "3"  # Gigabit Ethernet, per cms-nbi-client's documentation (4 is HPN
 # values are collected in `observed` so a check against a real CMS shows them.
 OBSERVED_FIELDS: Dict[str, tuple] = {
     "Ont": ("op-stat", "admin"),
-    "EthSvc": ("admin", "out-tag", "in-tag"),
+    "EthSvc": ("admin", "out-tag", "in-tag", "us-pir-override", "ds-pir-override"),
     "OntEthGe": ("admin",),
     "OntProf": ("geth", "pots", "rg", "default-to-rg"),
 }
@@ -210,7 +210,9 @@ def _service(obj: Dict[str, Any], router: Optional[RouterAddressing] = None) -> 
         bandwidth_profile=_dig(obj, "bw-prof", "id", "bwprof"),
         tag_action=_dig(obj, "tag-action", "id", "svctagaction"),
         admin_state=_scalar(obj.get("admin")) or "enabled",
-        description=_scalar(obj.get("descr")))
+        description=_scalar(obj.get("descr")),
+        # That a read answers with the request's element names and values ("100m", "none") is inferred
+        us_pir_override=_scalar(obj.get("us-pir-override")), ds_pir_override=_scalar(obj.get("ds-pir-override")))
 
 
 class CmsBackend:
@@ -282,7 +284,9 @@ class CmsBackend:
             f"{element('descr', service.description or '')}"
             f"<tag-action><type>SvcTagAction</type><id>{element('svctagaction', service.tag_action)}</id>"
             f"</tag-action><bw-prof><type>BwProf</type><id>{element('bwprof', service.bandwidth_profile)}</id>"
-            f"</bw-prof>{out_tag}" + SERVICE_DEFAULTS), get_config=True)
+            f"</bw-prof>{out_tag}" + SERVICE_DEFAULTS.format(
+                us_pir=element("us-pir-override", service.us_pir_override or "none"),
+                ds_pir=element("ds-pir-override", service.ds_pir_override or "none"))), get_config=True)
 
     async def update_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
                              service_index: int, change: ServiceChange) -> None:
@@ -296,6 +300,10 @@ class CmsBackend:
             body += f"<bw-prof><type>BwProf</type><id>{element('bwprof', change.bandwidth_profile)}</id></bw-prof>"
         if change.vlan is not None:
             body += element("out-tag", change.vlan)
+        if change.us_pir_override:
+            body += element("us-pir-override", change.us_pir_override)
+        if change.ds_pir_override:
+            body += element("ds-pir-override", change.ds_pir_override)
         await self.client.edit(network, "merge", body)
 
     async def delete_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,

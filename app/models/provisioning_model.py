@@ -37,6 +37,14 @@ PortName = Annotated[str, Field(pattern=PORT_PATTERN, description="eth1..eth8, o
 OuterVlan = Annotated[int, Field(ge=2, le=4093)]
 
 
+# A peak-rate (PIR) override on a service, sent to CMS as us-pir-override / ds-pir-override. "none"
+# means no override (what this project always sent before). The format comes from IDI's CMS R15.x
+# docs ("String, Optional, Format Example = 100m"); that "g" is accepted too, and nothing else, is
+# inferred from the examples, not confirmed against a CMS.
+PeakRate = Annotated[str, Field(pattern=r"^(none|[1-9][0-9]{0,3}[mg])$",
+                                description='Peak rate override, e.g. "100m", "1g", or "none" for no override')]
+
+
 class Attachment(str, Enum):
     """Where a service is attached on the ONT"""
     ETHERNET = "ethernet"  # a plain Ethernet port (CMS ONT slot 3)
@@ -93,6 +101,10 @@ class EthernetService(BaseModel):
     tag_action: Optional[ProfileName] = Field(
         None, description="Service tag action (a numeric ID on a real CMS, which requires one)")
     description: Optional[str] = Field(None, max_length=64)
+    us_pir_override: Optional[PeakRate] = Field(
+        None, description='Upstream peak rate override, e.g. "100m". Empty sends "none" (no override)')
+    ds_pir_override: Optional[PeakRate] = Field(
+        None, description='Downstream peak rate override, e.g. "1g". Empty sends "none" (no override)')
 
     @model_validator(mode="after")
     def _identifiable(self) -> "EthernetService":
@@ -117,6 +129,9 @@ class ProvisionedService(BaseModel):
     tag_action: Optional[str] = None
     admin_state: str = "enabled"
     description: Optional[str] = None
+    us_pir_override: Optional[str] = Field(None, description='Upstream peak rate override as CMS reports it, '
+                                                             'e.g. "100m" or "none"')
+    ds_pir_override: Optional[str] = Field(None, description="Downstream peak rate override as CMS reports it")
 
     def identity(self) -> Tuple[Any, ...]:
         return service_identity(self.attachment, self.ont_port, self.vlan, self.tag_action)
@@ -194,11 +209,14 @@ class ServiceChange(BaseModel):
     vlan: Optional[OuterVlan] = Field(
         None, description="New outer VLAN, 2 to 4093. A VLAN cannot be removed from a service here: delete the "
                           "service and add it again without one")
+    us_pir_override: Optional[PeakRate] = Field(None, description='New upstream peak rate override, or "none"')
+    ds_pir_override: Optional[PeakRate] = Field(None, description='New downstream peak rate override, or "none"')
 
     @model_validator(mode="after")
     def _something(self) -> "ServiceChange":
         if not self.model_dump(exclude_none=True):
-            raise ValueError("Set at least one of admin_state, bandwidth_profile, tag_action, vlan")
+            raise ValueError("Set at least one of admin_state, bandwidth_profile, tag_action, vlan, "
+                             "us_pir_override, ds_pir_override")
         return self
 
 

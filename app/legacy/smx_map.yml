@@ -46,6 +46,14 @@ admin_states:
   enabled: "DEMO-ENABLED"
   disabled: "DEMO-DISABLED"
 
+# CMS peak-rate overrides (us-pir-override / ds-pir-override, e.g. "100m") ->
+# SMx. Not set here: how SMx takes a peak rate is not known. While it is unset,
+# a service with an override other than "none" fails its subscriber.
+#   peak_rate_overrides:
+#     upstream_parameter: "<SMx parameter name>"
+#     downstream_parameter: "<SMx parameter name>"
+#     values: {"100m": "<SMx value>"}
+
 # SMx Service Name for each data service. Placeholders: {account}, {port}, {index}
 service_name: "{account}-{port}-{index}"
 

@@ -110,10 +110,12 @@ class MockCmsBackend:
         for ont in MOCK_ONTS:
             # Everyone has data; every third subscriber also has voice on port 2
             services = [ProvisionedService(service_index=1, ont_port=1, vlan=100,
-                                           bandwidth_profile="RES-1G", tag_action="1")]
+                                           bandwidth_profile="RES-1G", tag_action="1",
+                                           us_pir_override="none", ds_pir_override="none")]
             if ont.ont_id % 3 == 0:
                 services.append(ProvisionedService(service_index=1, ont_port=2, vlan=200,
-                                                   bandwidth_profile="VOICE", tag_action="2"))
+                                                   bandwidth_profile="VOICE", tag_action="2",
+                                                   us_pir_override="none", ds_pir_override="none"))
             state = OntState(
                 ont_id=ont.ont_id, serial_number=ont.serial, model=ont.model, profile=ont.model,
                 admin_state="enabled", pon_port=ont.pon, description=ont.description,
@@ -127,7 +129,8 @@ class MockCmsBackend:
                 ont_id=ont_id, serial_number=f"CXNK00B{n:05X}", model="844G-1", profile="844G-1",
                 pon_port=pon, description=f"Bulk ONT {ont_id}", subscriber_id=f"SUB-{ont_id}",
                 services=[ProvisionedService(service_index=1, ont_port=1, vlan=100,
-                                             bandwidth_profile="RES-1G", tag_action="1")]),
+                                             bandwidth_profile="RES-1G", tag_action="1",
+                                             us_pir_override="none", ds_pir_override="none")]),
                 on_wire=True, online_at=0.0)
 
         for serial, model, pon in (("CXNK00C4D301", "844G-1", "1/1/1"),
@@ -202,7 +205,8 @@ class MockCmsBackend:
         ont.state.services.append(ProvisionedService(
             service_index=max(on_port, default=0) + 1, ont_port=service.ont_port, attachment=attachment,
             vlan=service.vlan, bandwidth_profile=service.bandwidth_profile, tag_action=service.tag_action,
-            description=service.description))
+            description=service.description, us_pir_override=service.us_pir_override or "none",
+            ds_pir_override=service.ds_pir_override or "none"))
 
     async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts:
         await self._exchange(network)
@@ -326,7 +330,8 @@ class MockCmsBackend:
         self._onts[revlan].state.services[0].vlan = 300
         done.append(f"moved ONT {revlan} service 1 to VLAN 300")
         self._onts[stray].state.services.append(ProvisionedService(
-            service_index=9, ont_port=1, vlan=300, bandwidth_profile="RES-1G", tag_action="1"))
+            service_index=9, ont_port=1, vlan=300, bandwidth_profile="RES-1G", tag_action="1",
+            us_pir_override="none", ds_pir_override="none"))
         done.append(f"added a stray service to ONT {stray}")
         return done
 

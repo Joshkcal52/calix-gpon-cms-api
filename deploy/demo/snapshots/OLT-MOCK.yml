@@ -35,6 +35,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 2
@@ -67,6 +69,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 3
@@ -111,6 +115,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
   - port: eth2
@@ -121,6 +127,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: VOICE
     tag_action: '2'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 4
@@ -165,6 +173,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 5
@@ -197,6 +207,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 6
@@ -229,6 +241,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
   - port: eth2
@@ -239,6 +253,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: VOICE
     tag_action: '2'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 7
@@ -283,6 +299,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 8
@@ -315,6 +333,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 9
@@ -347,6 +367,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
   - port: eth2
@@ -357,6 +379,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: VOICE
     tag_action: '2'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 10
@@ -401,6 +425,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 11
@@ -433,6 +459,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 12
@@ -465,6 +493,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
   - port: eth2
@@ -475,6 +505,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: VOICE
     tag_action: '2'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 13
@@ -507,6 +539,8 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null
 - ont_id: 14
@@ -551,5 +585,7 @@ onts:
     inner_vlan: null
     bandwidth_profile: RES-1G
     tag_action: '1'
+    us_pir_override: none
+    ds_pir_override: none
     admin_state: enabled
     description: null

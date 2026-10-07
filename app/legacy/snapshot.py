@@ -48,8 +48,9 @@ SNAPSHOT_FORMAT = 2
 ONT_FIELDS = ("serial_number", "registration_id", "profile", "admin_state", "subscriber_id", "description",
               "pon_port")
 PORT_FIELDS = ("mode", "admin_state", "subscriber_id", "security_profile", "description")
+# Fields a saved snapshot does not have (us/ds_pir_override before they were exported) are not compared
 SERVICE_FIELDS = ("attachment", "ont_slot", "vlan", "inner_vlan", "bandwidth_profile", "tag_action",
-                  "admin_state", "description")
+                  "us_pir_override", "ds_pir_override", "admin_state", "description")
 
 
 def snapshot_from_export(export: CutoverExport, olt: Optional[str] = None) -> Dict[str, Any]:
@@ -67,6 +68,7 @@ def snapshot_from_export(export: CutoverExport, olt: Optional[str] = None) -> Di
             "services": [{"port": s.legacy_port, "service_index": s.service_index, "attachment": s.attachment,
                           "ont_slot": s.ont_slot, "vlan": s.vlan, "inner_vlan": s.c_vlan,
                           "bandwidth_profile": s.bandwidth_profile, "tag_action": s.tag_action,
+                          "us_pir_override": s.us_pir_override, "ds_pir_override": s.ds_pir_override,
                           "admin_state": s.admin_state, "description": s.description}
                          for s in sorted(record.data_services, key=lambda s: (s.legacy_port, s.service_index))],
         }
