@@ -18,7 +18,15 @@ R24.x integration docs use. They are NOT SMx's own API names or JSON shape,
 which are not known here: whoever builds the SMx client maps them.
 
 Rules:
-  - Every bandwidth profile, tag action, port and admin state is looked up in
+  - Each Ethernet port's bridge or router mode is carried over exactly as CMS
+    reports it, on the ONT request and on each data service. A mode that could
+    not be read fails the subscriber: it is never defaulted, and never to a
+    router/ONT combo. (844Gs that ran as bridges and were rebuilt as combos
+    gave customers two routers in a row.)
+  - The existing serial number is used unless fill_in_replacement_serial_number
+    is set, because the ONT may be kept or swapped. Each plan says which.
+  - Every ONT profile, bandwidth profile, tag action, port, port mode and admin
+    state is looked up in
     the mapping file (app/legacy/smx_map.yml or SMX_MAP_PATH). A value with no
     entry fails that subscriber with a message naming it, and it gets no
     requests. Other subscribers are unaffected.
@@ -37,10 +45,13 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.legacy.export import FILL_IN_ONT, FILL_IN_SUBSCRIBER, CutoverExport, ExportRecord, load_export
+from app.legacy.export import (
+    BRIDGE_NOTE, FILL_IN_ONT, FILL_IN_SUBSCRIBER, OPTIONAL_FILL_IN, CutoverExport, ExportRecord, load_export
+)
 
 NOT_SENT = ("Dry run. Nothing was sent to SMx. Parameter names follow the IDI billing SMx R24.x docs, "
-            "not SMx's own API, whose request format is not known here.")
+            "not SMx's own API, whose request format is not known here. 'PON Port', 'Port Modes' and "
+            "'Port Mode' are not in those docs: they carry what SMx must be told, under names chosen here.")
 
 
 class TagActionRule(BaseModel):
@@ -60,7 +71,9 @@ class TagActionRule(BaseModel):
 class SmxMap(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    ont_profiles: Dict[str, str] = Field(default_factory=dict, description="CMS ONT profile -> SMx ONT Profile ID")
     bandwidth_profiles: Dict[str, str] = Field(default_factory=dict, description="CMS bandwidth profile -> Policy Map")
+    port_modes: Dict[str, str] = Field(default_factory=dict, description="bridge / router -> SMx value")
     tag_actions: Dict[str, TagActionRule] = Field(default_factory=dict)
     ont_ports: Dict[str, str] = Field(default_factory=dict, description="CMS port -> SMx ONT Port ID")
     admin_states: Dict[str, str] = Field(default_factory=dict)
@@ -96,7 +109,10 @@ class SubscriberPlan(BaseModel):
     legacy_serial_number: str
     ok: bool = Field(..., description="False if a value had no mapping; then there are no requests")
     ready: bool = Field(..., description="ok and nothing left to fill in")
+    ont: Literal["kept", "replaced"] = Field(
+        ..., description="kept: the existing serial number is used. replaced: fill_in_replacement_serial_number")
     problems: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list, description="Worth a person's attention; not failures")
     to_fill_in: List[str] = Field(default_factory=list)
     requests: List[SmxRequest] = Field(default_factory=list)
 
@@ -116,12 +132,35 @@ def plan_subscriber(record: ExportRecord, mapping: SmxMap) -> SubscriberPlan:
     legacy = record.ont.legacy
     account = record.subscriber.account_number
     problems: List[str] = []
+    warnings: List[str] = []
     services: List[SmxRequest] = []
 
     if not account:
         problems.append("the ONT has no subscriber ID on CMS, so there is no account number")
     if not record.data_services:
         problems.append(f"ONT {legacy.ont_id} has no data services on CMS, so there is nothing to recreate")
+    ont_profile = mapping.ont_profiles.get(legacy.profile or "")
+    if ont_profile is None:
+        problems.append(f"ONT profile '{legacy.profile}' has no entry under ont_profiles")
+
+    # Each Ethernet port's mode, exactly as CMS has it. Never defaulted.
+    port_modes: Dict[str, str] = {}
+    if not legacy.port_modes:
+        problems.append("the Ethernet ports' bridge/router modes were not read from CMS, so they cannot be "
+                        "carried over (export with ports)")
+    for port, mode in legacy.port_modes.items():
+        if mode not in ("bridge", "router"):
+            problems.append(f"port {port}: its bridge/router mode could not be read from CMS; it is not defaulted")
+            continue
+        smx_port, smx_mode = mapping.ont_ports.get(port), mapping.port_modes.get(mode)
+        if smx_port is None:
+            problems.append(f"port {port} has no entry under ont_ports")
+        if smx_mode is None:
+            problems.append(f"port mode '{mode}' has no entry under port_modes")
+        if smx_port is not None and smx_mode is not None:
+            port_modes[smx_port] = smx_mode
+    if legacy.router_capable_running_as_bridge:
+        warnings.append(BRIDGE_NOTE)
 
     for service in record.data_services:
         label = f"service {service.service_index} on {service.legacy_port}"
@@ -139,6 +178,14 @@ def plan_subscriber(record: ExportRecord, mapping: SmxMap) -> SubscriberPlan:
         admin = mapping.admin_states.get(service.admin_state)
         if admin is None:
             problems.append(f"{label}: admin state '{service.admin_state}' has no entry under admin_states")
+        mode = None
+        if service.port_mode not in ("bridge", "router"):
+            problems.append(f"{label}: the bridge/router mode of its port could not be read from CMS; it is "
+                            f"not defaulted")
+        else:
+            mode = mapping.port_modes.get(service.port_mode)
+            if mode is None:
+                problems.append(f"{label}: port mode '{service.port_mode}' has no entry under port_modes")
 
         vlan: Optional[int] = None
         c_vlan: Optional[int] = None
@@ -166,6 +213,7 @@ def plan_subscriber(record: ExportRecord, mapping: SmxMap) -> SubscriberPlan:
             "OLT": record.ont.fill_in_olt,
             "ONT ID": None,  # assigned by SMx when the ONT is created
             "ONT Port ID": port,
+            "Port Mode": mode,
             "Service Name": mapping.service_name.format(account=account, port=service.legacy_port,
                                                         index=service.service_index),
             "Service Description": service.description,
@@ -176,14 +224,17 @@ def plan_subscriber(record: ExportRecord, mapping: SmxMap) -> SubscriberPlan:
         }
         services.append(SmxRequest(action="Create/Update Data Service", parameters=parameters))
 
+    subscriber, ont = record.subscriber, record.ont
+    disposition = "replaced" if ont.fill_in_replacement_serial_number else "kept"
     base = dict(account_number=account, legacy_network=legacy.network, legacy_ont_id=legacy.ont_id,
-                legacy_serial_number=legacy.serial_number)
+                legacy_serial_number=legacy.serial_number, ont=disposition, warnings=warnings)
     if problems:
         return SubscriberPlan(**base, ok=False, ready=False, problems=problems)
 
-    subscriber, ont = record.subscriber, record.ont
-    to_fill_in = [f for f in FILL_IN_SUBSCRIBER + FILL_IN_ONT
-                  if not getattr(subscriber if f in FILL_IN_SUBSCRIBER else ont, f)]
+    if not ont.registration_id:
+        warnings.append("CMS has no registration ID for this ONT; SMx asks for one.")
+    to_fill_in = [f for f in FILL_IN_SUBSCRIBER + FILL_IN_ONT if f not in OPTIONAL_FILL_IN
+                  and not getattr(subscriber if f in FILL_IN_SUBSCRIBER else ont, f)]
     requests = [
         SmxRequest(action="Create/Update Subscriber", parameters={
             **mapping.subscriber_defaults,
@@ -194,11 +245,13 @@ def plan_subscriber(record: ExportRecord, mapping: SmxMap) -> SubscriberPlan:
         SmxRequest(action="Create/Update ONT", parameters={
             **mapping.ont_defaults,
             "OLT": ont.fill_in_olt,
+            "PON Port": ont.fill_in_pon_port,
             "Subscriber ID": account,
-            "ONT Profile ID": ont.fill_in_ont_profile,
-            "Serial Number": ont.fill_in_serial_number,
-            "Registration ID": ont.fill_in_registration_id,
-            "ONT Description": ont.description}),
+            "ONT Profile ID": ont_profile,
+            "Serial Number": ont.fill_in_replacement_serial_number or ont.serial_number,
+            "Registration ID": ont.registration_id,
+            "ONT Description": ont.description,
+            "Port Modes": port_modes}),
         *services]
     return SubscriberPlan(**base, ok=True, ready=not to_fill_in, to_fill_in=to_fill_in, requests=requests)
 

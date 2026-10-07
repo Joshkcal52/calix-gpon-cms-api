@@ -59,7 +59,7 @@ from app.nbi.errors import (
     NbiAuthError, NbiConflictError, NbiConnectionError, NbiError, NbiNotFoundError,
     NbiNotVerifiedError, NbiRejectedError, NbiTimeoutError
 )
-from app.nbi.router_side import NOT_CONFIGURED, RouterAddressing
+from app.nbi.router_side import MODE_NOT_SETTABLE, NOT_CONFIGURED, RouterAddressing, read_port_mode
 from app.nbi.serno import from_serno, to_serno
 
 logger = logging.getLogger(__name__)
@@ -175,10 +175,15 @@ def _profile(obj: Dict[str, Any]) -> OntProfile:
         default_to_rg=_flag(obj.get("default-to-rg")))
 
 
-def _ge_port(obj: Dict[str, Any], number: int) -> PortState:
-    """OntEthGe. Element names from the library's write request; that a read uses them too is inferred."""
+def _ge_port(obj: Dict[str, Any], number: int, router: Optional[RouterAddressing] = None) -> PortState:
+    """
+    OntEthGe. Element names from the library's write request; that a read uses
+    them too is inferred. The mode comes from app/nbi/router_side.py and is
+    "unknown" until that is configured.
+    """
     return PortState(
         port=port_name(Attachment.ETHERNET, number), attachment=Attachment.ETHERNET, number=number,
+        mode=read_port_mode(router, obj),
         admin_state=_scalar(obj.get("admin")), subscriber_id=_scalar(obj.get("subscr-id")),
         description=_scalar(obj.get("descr")), security_profile=_dig(obj, "sec", "id", "ethsecprof"))
 
@@ -194,6 +199,7 @@ def _ont_state(obj: Dict[str, Any], services: Optional[List[ProvisionedService]]
         pon_port=_pon_port(obj.get("linked-pon")),
         description=_scalar(obj.get("descr")),
         subscriber_id=_scalar(obj.get("subscr-id")),
+        registration_id=_scalar(obj.get("reg-id")),
         services=services or [])
 
 
@@ -206,7 +212,7 @@ def _attachment(slot: Optional[str], router: Optional[RouterAddressing]) -> Atta
     """
     if slot in (None, ONT_SLOT):
         return Attachment.ETHERNET
-    if router is not None and slot == router.service_slot:
+    if router is not None and router.service_slot and slot == router.service_slot:
         return Attachment.ROUTER
     return Attachment.UNKNOWN
 
@@ -411,13 +417,13 @@ class CmsNbiClientBackend:
                         break
                     raise
                 found = self._audit(result, "OntEthGe")
-                ethernet.append(_ge_port(found[0] if found else {}, number))
+                ethernet.append(_ge_port(found[0] if found else {}, number, self._router))
 
             present = None if profile is None or profile.rg_ports is None else profile.rg_ports > 0
             router = RouterState(present=present, default_to_rg=profile.default_to_rg if profile else None,
                                  services=sum(1 for s in services if s.attachment == Attachment.ROUTER))
             unknown = [s for s in services if s.attachment == Attachment.UNKNOWN]
-            if present and self._router is None:
+            if present and (self._router is None or not self._router.router_ports):
                 router.note = "Router ports not read: " + NOT_CONFIGURED
             elif present:
                 for number in range(1, profile.rg_ports + 1):
@@ -436,6 +442,8 @@ class CmsNbiClientBackend:
     async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,
                           change: PortChange) -> None:
         values = change.model_dump(exclude_none=True)
+        if "mode" in values:
+            raise NbiNotVerifiedError(MODE_NOT_SETTABLE)
         if Attachment(attachment) == Attachment.ROUTER:
             if set(values) - {"admin_state"}:
                 raise NbiRejectedError("Only the admin state of a router port can be changed.")
@@ -574,11 +582,15 @@ class CmsNbiClientBackend:
         """The objects of one type in a result, noting any field nobody here knows"""
         found = list(_objects(result, object_type))
         known = KNOWN_FIELDS.get(object_type, set())
-        if self._router is not None and object_type == self._router.port_type:
+        if self._router is not None and self._router.port_type and object_type == self._router.port_type:
             known = {"type", "id", "admin"}
+        mode_element = self._router.port_mode_element if self._router else None
+        if object_type == "OntEthGe" and mode_element:
+            known = known | {mode_element}
         for obj in found:
             self.unrecognised[object_type].update(key for key in obj if key not in known and not key.startswith("@"))
-            for field in OBSERVED_FIELDS.get(object_type, ()):
+            for field in OBSERVED_FIELDS.get(object_type, ()) + (
+                    (mode_element,) if object_type == "OntEthGe" and mode_element else ()):
                 self.observed[f"{object_type}.{field}"].add(_scalar(obj.get(field)) or "(empty)")
         return found
 
@@ -589,13 +601,13 @@ class CmsNbiClientBackend:
         if attachment == Attachment.ETHERNET:
             return ONT_SLOT
         if attachment == Attachment.ROUTER:
-            if self._router is None:
+            if self._router is None or not self._router.service_slot:
                 raise NbiNotVerifiedError(NOT_CONFIGURED)
             return self._router.service_slot
         raise NbiRejectedError("A service in an unrecognised ONT slot cannot be addressed.")
 
     def _router_port_id(self, ont_id: int, number: int) -> str:
-        if self._router is None:
+        if self._router is None or not self._router.router_ports:
             raise NbiNotVerifiedError(NOT_CONFIGURED)
         element = self._router.port_id_element
         return f"<type>{escape(self._router.port_type)}</type><id><ont>{ont_id}</ont><{element}>{number}</{element}></id>"

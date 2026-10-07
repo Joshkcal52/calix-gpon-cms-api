@@ -21,6 +21,10 @@ SubscriberId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{1,32}$", descripti
 # A security profile is a numeric database ID on CMS (1 to 16 per the cms-nbi-client docstring)
 SecurityProfileId = Annotated[str, Field(pattern=r"^[0-9]{1,3}$", description="Ethernet security profile ID")]
 AdminState = Literal["enabled", "disabled", "enabled-no-alarms"]
+# How an Ethernet port forwards: bridge (straight through to the customer's own
+# router) or router (behind the ONT's built-in router). Always read from CMS for
+# each port, never assumed from the ONT model. See app/nbi/router_side.py.
+PortMode = Literal["bridge", "router"]
 
 # A port on an ONT, as used in URLs: eth1..eth8 for Ethernet ports, rg1..rg8 for
 # the router (residential gateway) side of ONTs that have one, such as the 844G.
@@ -99,6 +103,7 @@ class OntState(BaseModel):
     pon_port: Optional[str] = None
     description: Optional[str] = None
     subscriber_id: Optional[str] = None
+    registration_id: Optional[str] = Field(None, description="CMS reg-id (the RONTA registration ID)")
     services: List[ProvisionedService] = []
 
     def service_at(self, attachment: Attachment, ont_port: int, service_index: int) -> Optional[ProvisionedService]:
@@ -117,6 +122,9 @@ class EthernetPortConfig(BaseModel):
     subscriber_id: Optional[SubscriberId] = None
     security_profile: Optional[SecurityProfileId] = None
     description: Optional[str] = Field(None, max_length=48)
+    mode: Optional[PortMode] = Field(
+        None, description="bridge or router. Only the simulated CMS can set this: on a real CMS the request "
+                          "is refused (cms_unverified), because how CMS sets it is not known")
 
     def changes(self) -> "PortChange":
         return PortChange(**self.model_dump(exclude={"port"}, exclude_none=True))
@@ -130,11 +138,12 @@ class PortChange(BaseModel):
     subscriber_id: Optional[SubscriberId] = None
     security_profile: Optional[SecurityProfileId] = None
     description: Optional[str] = Field(None, max_length=48)
+    mode: Optional[PortMode] = Field(None, description="bridge or router (simulated CMS only, see EthernetPortConfig)")
 
     @model_validator(mode="after")
     def _something(self) -> "PortChange":
         if not self.model_dump(exclude_none=True):
-            raise ValueError("Set at least one of admin_state, subscriber_id, security_profile, description")
+            raise ValueError("Set at least one of admin_state, subscriber_id, security_profile, description, mode")
         return self
 
 
@@ -163,12 +172,16 @@ class PortState(BaseModel):
     subscriber_id: Optional[str] = None
     security_profile: Optional[str] = None
     description: Optional[str] = None
+    mode: Optional[Literal["bridge", "router", "unknown"]] = Field(
+        None, description="Ethernet ports only: bridge or router as CMS reports it, unknown if it could not be read")
 
 
 class RouterState(BaseModel):
     """What is known about the ONT's built-in router (RG)"""
     present: Optional[bool] = Field(None, description="From the ONT profile's rg attribute. None if unknown")
-    default_to_rg: Optional[bool] = Field(None, description="From the ONT profile's default-to-rg attribute")
+    default_to_rg: Optional[bool] = Field(
+        None, description="From the ONT profile's default-to-rg attribute. A profile default, NOT the ports' "
+                          "actual mode: read each port's mode instead")
     ports: List[PortState] = Field(default_factory=list, description="Router ports read from CMS")
     services: int = Field(0, description="Services attached to the router side")
     note: Optional[str] = Field(None, description="Why part of this could not be read")

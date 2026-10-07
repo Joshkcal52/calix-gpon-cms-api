@@ -42,7 +42,10 @@ MOCK_SECURITY_PROFILES = {str(n) for n in range(1, 17)}
 
 
 def _new_port() -> Dict[str, Any]:
-    return {"admin_state": "enabled", "subscriber_id": None, "security_profile": None, "description": None}
+    # A new port starts as a bridge in the simulation. That is the simulation's choice, not a
+    # statement about CMS: real code reads each port's mode and never assumes one.
+    return {"admin_state": "enabled", "subscriber_id": None, "security_profile": None, "description": None,
+            "mode": "bridge"}
 
 
 class _MockOnt:
@@ -191,6 +194,9 @@ class MockCmsBackend:
                 raise NbiRejectedError("Only the admin state of a router port can be changed.")
             ont.router_ports[number].update(values)
             return
+        if values.get("mode") == "router" and not ont.router_ports:
+            raise NbiRejectedError(f"ONT {ont_id} (profile {ont.state.profile}) has no router, so port "
+                                   f"eth{number} cannot be in router mode.")
         if "security_profile" in values and values["security_profile"] not in MOCK_SECURITY_PROFILES:
             raise NbiRejectedError(f"Ethernet security profile {values['security_profile']} does not exist "
                                    f"on {network}. Available: 1 to 16.")

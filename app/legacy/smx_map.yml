@@ -7,6 +7,12 @@
 # A subscriber whose CMS data uses a value not listed here fails with a message
 # naming it, and gets no requests. Nothing is guessed.
 
+# CMS ONT profile -> SMx ONT Profile ID (for the kept ONT, or its replacement)
+ont_profiles:
+  "716GE-I": "DEMO-PROFILE-716GE"
+  "812G-1": "DEMO-PROFILE-812G"
+  "844G-1": "DEMO-PROFILE-844G"
+
 # CMS bandwidth profile -> SMx Policy Map
 bandwidth_profiles:
   "RES-1G": "DEMO-POLICY-RESI-1G"
@@ -19,13 +25,21 @@ tag_actions:
   "1": {vlan: outer, c_vlan: none}
   "2": {vlan: outer, c_vlan: none}
 
-# CMS port (eth1..eth8, rg1) -> SMx ONT Port ID on the new ONT.
-# Depends on the new ONT's model. Router-side (rg1) services caused trouble in
-# manual cutovers: decide deliberately where each one goes.
+# CMS port (eth1..eth8, rg1) -> SMx ONT Port ID. Every Ethernet port is listed,
+# because each port's mode is carried over, not only the ports with services.
 ont_ports:
   eth1: "DEMO-PORT-1"
   eth2: "DEMO-PORT-2"
+  eth3: "DEMO-PORT-3"
+  eth4: "DEMO-PORT-4"
   rg1: "DEMO-PORT-RG"
+
+# Each Ethernet port's mode as CMS reports it -> SMx value. A port whose mode
+# could not be read fails the subscriber; nothing is defaulted. 844Gs that ran
+# as bridges and were rebuilt as router/ONT combos gave customers double NAT.
+port_modes:
+  bridge: "DEMO-BRIDGE"
+  router: "DEMO-ROUTER"
 
 # CMS admin state -> SMx Admin State
 admin_states:

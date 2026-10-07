@@ -33,7 +33,8 @@ def build_handlers(settings: Any, gateway: NbiGateway, playbook_runner: Playbook
         return await apply_ont_change(context, gateway, payload["network"], int(payload["ont_id"]), change)
 
     async def handle_run_playbook(context: JobContext, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return await run_playbook(context, playbook_runner, payload, api_url=settings.api_base_url)
+        return await run_playbook(context, playbook_runner, payload, api_url=settings.api_base_url,
+                                  api_key=settings.automation_api_key)
 
     return {
         ACTION_ACTIVATE_ONT: handle_activate_ont,

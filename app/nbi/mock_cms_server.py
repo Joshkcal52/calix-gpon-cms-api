@@ -19,8 +19,9 @@ tags) are educated guesses. Nothing here has been compared with a real CMS.
     answers with the same names is inferred.
   - OntProf and Vlan replies use the attribute names the library asks for in
     its attr-list. Their values (port counts, "true"/"false") are inferred.
-  - The router side (RG) uses the deliberately fake names in
-    app/nbi/router_side.py:MOCK_RG_ADDRESSING. Calix's are not known.
+  - The router side (RG), and each Ethernet port's bridge/router mode, use the
+    deliberately fake names in app/nbi/router_side.py:MOCK_RG_ADDRESSING.
+    Calix's are not known.
 
 Helper endpoints for demos and tests (not part of CMS):
     GET  /mock/state                  every ONT, as JSON
@@ -173,9 +174,11 @@ def _port_xml(ont_id: int, port: PortState) -> str:
                 f"<admin>{escape(port.admin_state or '')}</admin>")
     security = (f"<sec><type>EthSecProf</type><id><ethsecprof>{escape(port.security_profile)}</ethsecprof></id></sec>"
                 if port.security_profile else "")
+    binding = "rg1" if port.mode == "router" else "none"  # fake element and values, see router_side.py
     return (f"<type>OntEthGe</type><id><ont>{ont_id}</ont><ontslot>{ONT_SLOT}</ontslot>"
             f"<ontethge>{port.number}</ontethge></id><admin>{escape(port.admin_state or '')}</admin>"
-            f"{_optional('subscr-id', port.subscriber_id)}{_optional('descr', port.description)}{security}")
+            f"{_optional('subscr-id', port.subscriber_id)}{_optional('descr', port.description)}{security}"
+            f"<{RG.port_mode_element}>{binding}</{RG.port_mode_element}>")
 
 
 def _profile_xml(profile: OntProfile) -> str:

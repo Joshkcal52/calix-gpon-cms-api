@@ -177,6 +177,12 @@ def test_port_lifecycle_including_the_router_port(api):
     assert (eth2["admin_state"], eth2["subscriber_id"], eth2["security_profile"]) == ("disabled", "SUB-1003", "2")
     assert ports["router"]["ports"][0]["admin_state"] == "disabled"
 
+    # The simulated CMS can also switch a port between bridge and router mode
+    assert finish(api, api.patch(f"{BASE}/onts/3/ports/eth1", json={"mode": "router"}))["status"] == "succeeded"
+    assert api.get(f"{BASE}/onts/3/ports").json()["ethernet"][0]["mode"] == "router"
+    bridged = finish(api, api.patch(f"{BASE}/onts/1/ports/eth1", json={"mode": "router"}))
+    assert "cannot be in router mode" in bridged["error"]["message"]
+
     # ONT 1 is a 716GE-I: no router, and only two Ethernet ports in the simulation
     no_router = finish(api, api.post(f"{BASE}/onts/1/ports/rg1/disable"))
     assert no_router["error"]["code"] == "cms_rejected" and "has no router" in no_router["error"]["message"]
@@ -364,6 +370,8 @@ def test_without_router_settings_nothing_router_side_is_sent_or_guessed(cms, mon
             await unverified.update_port(NET, 3, Attachment.ROUTER, 1, PortChange(admin_state="disabled"))
         with pytest.raises(NbiNotVerifiedError):
             await unverified.delete_service(NET, 3, Attachment.ROUTER, 1, 1)
+        with pytest.raises(NbiNotVerifiedError, match="mode through the CMS API is not known"):
+            await verified.update_port(NET, 3, Attachment.ETHERNET, 1, PortChange(mode="router"))
         assert len(edits(server)) == before  # refused before anything was sent
 
         # Read back without the settings: the router-side service is "unknown", not guessed

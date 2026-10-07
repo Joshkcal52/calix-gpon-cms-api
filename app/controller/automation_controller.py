@@ -187,7 +187,7 @@ def build_playbook_runner(settings: Any) -> PlaybookRunner:
 
 
 async def run_playbook(context: JobContext, runner: PlaybookRunner, payload: Dict[str, Any],
-                       api_url: str) -> Dict[str, Any]:
+                       api_url: str, api_key: Optional[str] = None) -> Dict[str, Any]:
     """Worker-side handler body for RUN_PLAYBOOK"""
     spec = PLAYBOOKS.get(payload.get("playbook", ""))
     if spec is None:
@@ -196,6 +196,7 @@ async def run_playbook(context: JobContext, runner: PlaybookRunner, payload: Dic
     # Validate again on the worker: the queue is a trust boundary too
     variables = spec.vars_model.model_validate(payload.get("variables") or {}).model_dump()
     variables["api_url"] = api_url  # set by the server, never by the caller
+    variables["api_key"] = api_key or ""  # AUTOMATION_API_KEY; sent back to this API by the playbook
 
     await context.emit("log", f"Running playbook {spec.name} with {runner.name}", runner=runner.name)
     return await runner.run(spec, variables, payload.get("limit"), context.job_id, context.emit_threadsafe)

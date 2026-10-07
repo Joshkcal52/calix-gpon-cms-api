@@ -43,22 +43,29 @@ def _mapping() -> SmxMap:
             responses={200: {"content": {"text/csv": {}}}})
 async def export(network: str = NetworkPath,
                  pon: Optional[str] = Query(None, pattern=r"^\d+/\d+/\d+$", description="Only this PON port"),
+                 card: Optional[str] = Query(None, pattern=r"^\d+/\d+$", description="Only this card (shelf/card)"),
                  format: str = Query("json", pattern="^(json|csv)$"),
                  table: str = Query("services", pattern="^(services|ports)$", description="Which CSV"),
                  ports: bool = Query(True, description="Read port settings (one CMS call per port)"),
                  gateway: NbiGateway = Depends(get_gateway)):
     """
-    Everything CMS holds for a network or one PON port, one record per ONT,
-    laid out as subscriber, ONT and data services. Fields CMS cannot provide
-    start with `fill_in_` and are empty. Only reads CMS; on a large network
-    this takes a while (several calls per ONT, in parallel).
+    Everything CMS holds for a network, one card or one PON port, one record
+    per ONT, laid out as subscriber, ONT and data services. The existing
+    serial number is carried over (the ONT may be kept). Fields CMS cannot
+    provide start with `fill_in_` and are empty. Each Ethernet port's
+    bridge/router mode is included, and router-capable ONTs running as
+    bridges are flagged. Only reads CMS; on a large network this takes a
+    while (several calls per ONT, in parallel).
     """
-    result = await export_network(gateway, network, pon, include_ports=ports)
+    if pon and card:
+        raise HTTPException(status_code=422, detail="Pass pon or card, not both")
+    result = await export_network(gateway, network, pon, include_ports=ports, card=card)
     if format == "json":
         return result
     rows, columns = (service_rows(result), SERVICE_COLUMNS) if table == "services" else (port_rows(result),
                                                                                          PORT_COLUMNS)
-    name = f"{network}{'-pon-' + pon.replace('/', '-') if pon else ''}.{table}.csv"
+    scope = f"-pon-{pon.replace('/', '-')}" if pon else (f"-card-{card.replace('/', '-')}" if card else "")
+    name = f"{network}{scope}.{table}.csv"
     return PlainTextResponse(to_csv(rows, columns), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
 

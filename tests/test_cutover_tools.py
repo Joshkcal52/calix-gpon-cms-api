@@ -50,9 +50,11 @@ def finish(api, response):
 
 
 def mapping(**overrides):
-    fields = dict(bandwidth_profiles={"RES-1G": "POLICY-1G", "VOICE": "POLICY-VOICE"},
+    fields = dict(ont_profiles={"716GE-I": "PROF-716", "812G-1": "PROF-812", "844G-1": "PROF-844"},
+                  bandwidth_profiles={"RES-1G": "POLICY-1G", "VOICE": "POLICY-VOICE"},
                   tag_actions={"1": TagActionRule(vlan="outer"), "2": TagActionRule(vlan="outer")},
-                  ont_ports={"eth1": "P1", "eth2": "P2", "rg1": "P-RG"},
+                  ont_ports={"eth1": "P1", "eth2": "P2", "eth3": "P3", "eth4": "P4", "rg1": "P-RG"},
+                  port_modes={"bridge": "BRIDGE", "router": "ROUTER"},
                   admin_states={"enabled": "UP", "disabled": "DOWN"},
                   service_name="{account}-{port}-{index}")
     fields.update(overrides)
@@ -75,15 +77,30 @@ def test_export_lays_out_cms_in_smx_terms_with_blanks_to_fill_in(api):
     assert export["network"] == NET and len(export["records"]) == 14
     assert export["to_fill_in"] == list(FILL_IN_SUBSCRIBER + FILL_IN_ONT)
 
+    assert FILL_IN_ONT == ("fill_in_olt", "fill_in_pon_port", "fill_in_replacement_serial_number")
     record = next(r for r in export["records"] if r["ont"]["legacy"]["ont_id"] == 3)
     assert record["subscriber"] == {"account_number": "SUB-1003", **{k: None for k in FILL_IN_SUBSCRIBER}}
     assert {k: record["ont"][k] for k in FILL_IN_ONT} == {k: None for k in FILL_IN_ONT}
+    assert record["ont"]["serial_number"] == "CXNK00A3F103"  # carried over: the ONT may be kept
     legacy = record["ont"]["legacy"]
     assert (legacy["serial_number"], legacy["profile"], legacy["pon_port"], legacy["router_present"]) == (
         "CXNK00A3F103", "844G-1", "1/1/1", True)
     assert [(s["legacy_port"], s["vlan"], s["bandwidth_profile"], s["tag_action"]) for s in record["data_services"]] == [
         ("eth1", 100, "RES-1G", "1"), ("eth2", 200, "VOICE", "2")]
     assert [p["port"] for p in record["ports"]] == ["eth1", "eth2", "eth3", "eth4", "rg1"]
+
+    # The simulated 844Gs run every port as a bridge: flagged, with the reason
+    assert legacy["port_modes"] == {"eth1": "bridge", "eth2": "bridge", "eth3": "bridge", "eth4": "bridge"}
+    assert legacy["router_capable_running_as_bridge"] is True
+    assert any("Keep it a bridge" in n for n in record["notes"])
+    assert [s["port_mode"] for s in record["data_services"]] == ["bridge", "bridge"]
+    one = next(r for r in export["records"] if r["ont"]["legacy"]["ont_id"] == 1)  # 716GE-I, no router
+    assert one["ont"]["legacy"]["router_capable_running_as_bridge"] is False and one["notes"] == []
+
+    card = api.get(f"{BASE}/export", params={"card": "1/1"}).json()
+    assert card["card"] == "1/1" and len(card["records"]) == 14
+    assert api.get(f"{BASE}/export", params={"card": "1/2"}).json()["records"] == []
+    assert api.get(f"{BASE}/export", params={"card": "1/1", "pon": "1/1/1"}).status_code == 422
 
     pon = api.get(f"{BASE}/export", params={"pon": "1/1/2"}).json()
     assert {r["ont"]["legacy"]["pon_port"] for r in pon["records"]} == {"1/1/2"}
@@ -145,12 +162,16 @@ def test_a_filled_in_spreadsheet_becomes_ready_smx_requests(api):
     assert one.ok and one.ready and one.to_fill_in == []
     assert [r.action for r in one.requests] == ["Create/Update Subscriber", "Create/Update ONT",
                                                 "Create/Update Data Service", "Create/Update Data Service"]
+    assert one.ont == "replaced"  # a replacement serial was filled in
     ont = one.requests[1].parameters
-    assert (ont["Serial Number"], ont["OLT"], ont["ONT Profile ID"], ont["Subscriber ID"]) == (
-        "serial_number-3", "olt-3", "ont_profile-3", "SUB-1003")
+    assert (ont["Serial Number"], ont["OLT"], ont["PON Port"], ont["ONT Profile ID"], ont["Subscriber ID"]) == (
+        "replacement_serial_number-3", "olt-3", "pon_port-3", "PROF-844", "SUB-1003")
+    assert ont["Port Modes"] == {"P1": "BRIDGE", "P2": "BRIDGE", "P3": "BRIDGE", "P4": "BRIDGE"}
+    assert any("Keep it a bridge" in w for w in one.warnings)
     data, voice = (r.parameters for r in one.requests[2:])
     assert (data["Policy Map"], data["VLAN"], data["c-VLAN"], data["ONT Port ID"], data["Admin State"],
-            data["Service Name"]) == ("POLICY-1G", 100, None, "P1", "UP", "SUB-1003-eth1-1")
+            data["Service Name"], data["Port Mode"]) == ("POLICY-1G", 100, None, "P1", "UP", "SUB-1003-eth1-1",
+                                                         "BRIDGE")
     assert (voice["Policy Map"], voice["VLAN"], voice["ONT Port ID"]) == ("POLICY-VOICE", 200, "P2")
 
 
@@ -165,10 +186,44 @@ def test_an_unmapped_value_fails_only_that_subscriber_and_names_it(api):
     assert failed["SUB-1003"].requests == []
     assert plan.ok == 10 and plan.failed == 4 and plan.ready == 0  # nothing filled in yet
 
-    plan = plan_export(export, mapping(ont_ports={"eth1": "P1"}, admin_states={}, tag_actions={}), "SUB-1001")
+    plan = plan_export(export, mapping(admin_states={}, tag_actions={}, port_modes={"router": "R"}), "SUB-1001")
     assert plan.plans[0].problems == [
+        "port mode 'bridge' has no entry under port_modes",
+        "port mode 'bridge' has no entry under port_modes",
         "service 1 on eth1: admin state 'enabled' has no entry under admin_states",
+        "service 1 on eth1: port mode 'bridge' has no entry under port_modes",
         "service 1 on eth1: tag action '1' has no entry under tag_actions"]
+
+
+def test_the_existing_serial_is_kept_unless_a_replacement_is_filled_in(api):
+    export = CutoverExport.model_validate(api.get(f"{BASE}/export").json())
+    (kept,) = plan_export(export, mapping(), "SUB-1001").plans
+    assert kept.ont == "kept" and kept.requests[1].parameters["Serial Number"] == "CXNK00A3F101"
+    assert "fill_in_replacement_serial_number" not in kept.to_fill_in  # optional
+    assert {"fill_in_olt", "fill_in_pon_port", "fill_in_first_name"} <= set(kept.to_fill_in)
+
+
+def test_port_modes_are_carried_exactly_and_never_defaulted(api):
+    finish(api, api.post(f"{BASE}/signups", json={
+        "subscriber_id": "SUB-4001", "serial_number": "CXNK00C4D301", "profile": "844G-1",
+        "ports": [{"port": n, "mode": "router"} for n in (1, 2, 3)] + [{"port": 4, "mode": "bridge"}],
+        "services": [{"vlan": 100, "bandwidth_profile": "RES-1G", "tag_action": "1", "attach_to": "router"}]}))
+    export = CutoverExport.model_validate(api.get(f"{BASE}/export").json())
+    record = next(r for r in export.records if r.subscriber.account_number == "SUB-4001")
+    assert record.ont.legacy.port_modes == {"eth1": "router", "eth2": "router", "eth3": "router", "eth4": "bridge"}
+    assert record.ont.legacy.router_capable_running_as_bridge is False
+    (plan,) = plan_export(export, mapping(), "SUB-4001").plans
+    assert plan.requests[1].parameters["Port Modes"] == {"P1": "ROUTER", "P2": "ROUTER", "P3": "ROUTER",
+                                                         "P4": "BRIDGE"}
+    assert plan.requests[2].parameters["Port Mode"] == "ROUTER" and plan.warnings == [
+        "CMS has no registration ID for this ONT; SMx asks for one."]
+
+    record.ont.legacy.port_modes["eth4"] = "unknown"
+    (failed,) = plan_export(export, mapping(), "SUB-4001").plans
+    assert failed.problems == ["port eth4: its bridge/router mode could not be read from CMS; it is not defaulted"]
+    record.ont.legacy.port_modes = {}
+    (failed,) = plan_export(export, mapping(), "SUB-4001").plans
+    assert "modes were not read" in failed.problems[0]
 
 
 def test_vlans_come_from_the_tag_action_rule_and_are_never_guessed(api):
@@ -209,7 +264,7 @@ def test_plan_routes(api):
     assert api.post("/api/v2/smx/plans", json={"export": export, "subscriber_id": "nobody"}).status_code == 404
 
     live = api.get(f"{BASE}/subscribers/SUB-1003/smx-plan").json()
-    assert live["plans"][0]["ok"] is True and "fill_in_serial_number" in live["plans"][0]["to_fill_in"]
+    assert live["plans"][0]["ok"] is True and "fill_in_olt" in live["plans"][0]["to_fill_in"]
     assert api.get(f"{BASE}/subscribers/SUB-9999/smx-plan").status_code == 404
     api.app.state.gateway.backend._onts[2].state.subscriber_id = "SUB-1001"
     assert api.get(f"{BASE}/subscribers/SUB-1001/smx-plan").status_code == 409
@@ -257,22 +312,26 @@ def test_router_side_services_export_only_as_far_as_they_are_known(nbi_server):
     known, unknown = asyncio.run(scenario())
     four = next(r for r in known.records if r.ont.legacy.ont_id == 4)
     assert [s.legacy_port for s in four.data_services] == ["eth1", "rg1"]
+    assert four.ont.legacy.port_modes == {f"eth{n}": "bridge" for n in range(1, 5)}
     assert plan_export(known, mapping(), "SUB-1004").plans[0].ok is True
 
     four = next(r for r in unknown.records if r.ont.legacy.ont_id == 4)
     assert [s.legacy_port for s in four.data_services] == ["eth1", "slotUNVERIFIED-RG-port1"]
     assert any("ONT slot" in n for n in four.notes)
+    # Without CMS_RG_PORT_MODE_ELEMENT the mode is unknown: not guessed from the 844G model
+    assert four.ont.legacy.port_modes == {f"eth{n}": "unknown" for n in range(1, 5)}
+    assert four.ont.legacy.router_capable_running_as_bridge is None
     rows = [r for r in service_rows(unknown) if r["legacy_ont_id"] == "4"]
     assert rows[1]["service_attachment"] == "unknown" and rows[1]["service_ont_slot"] == "UNVERIFIED-RG"
     failed = plan_export(unknown, mapping(), "SUB-1004").plans[0]
-    assert not failed.ok and "does not recognise" in failed.problems[0]
+    assert not failed.ok and any("does not recognise" in p for p in failed.problems)
 
 
 # --- Read-only check for a real CMS --------------------------------------------------------
 
-def check(port, *extra, password="demo-password"):
+def check(port, *extra, password="demo-password", env=None):
     env = {**os.environ, "CMS_HOST": "127.0.0.1", "CMS_PORT": str(port), "CMS_USERNAME": "nbi-demo",
-           "CMS_PASSWORD": password, "MOCK_MODE": "false"}
+           "CMS_PASSWORD": password, "MOCK_MODE": "false", **(env or {})}
     return subprocess.run([sys.executable, "-m", "app.tools.cms_check", "--network", NET, *extra],
                           cwd=REPO, env=env, capture_output=True, text=True, timeout=120)
 
@@ -296,8 +355,18 @@ def test_the_check_reads_and_reports_without_changing_anything(nbi_server, tmp_p
     login = next(p for p in dumped if p.name == "001.request.xml").read_text()
     assert "demo-password" not in login and "********" in login
 
-    report = json.loads(check(port, "--json").stdout)
-    assert report["ok"] is True and report["unrecognised_reply_fields"] == {}
+    # Without CMS_RG_PORT_MODE_ELEMENT the element carrying the port mode is reported as unrecognised:
+    # that is how it would be found on a real CMS
+    report = json.loads(check(port, "--json", "--ont-id", "3").stdout)
+    assert report["ok"] is True
+    assert report["unrecognised_reply_fields"] == {"OntEthGe": [MOCK_RG_ADDRESSING.port_mode_element]}
+
+    configured = json.loads(check(port, "--json", "--ont-id", "3",
+                                  env={"CMS_RG_PORT_MODE_ELEMENT": MOCK_RG_ADDRESSING.port_mode_element}).stdout)
+    assert configured["unrecognised_reply_fields"] == {}
+    assert configured["raw_values_of_inferred_fields"][f"OntEthGe.{MOCK_RG_ADDRESSING.port_mode_element}"] == ["none"]
+    ports = next(s for s in configured["steps"] if "ports" in s["step"])["detail"]["ethernet"]
+    assert {p["mode"] for p in ports} == {"bridge"}
 
 
 def test_the_check_reports_reply_fields_it_does_not_recognise(nbi_server, monkeypatch):
