@@ -26,6 +26,7 @@ class SSHConnectionStatus(BaseModel):
     connected_at: Optional[datetime] = Field(None, description="Connection timestamp")
     last_command: Optional[str] = Field(None, description="Last command executed")
     error_message: Optional[str] = Field(None, description="Error message if connection failed")
+    mock_mode: bool = Field(False, description="True when the device is simulated (MOCK_MODE), not real hardware")
 
 
 class SSHCommandRequest(BaseModel):

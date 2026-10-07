@@ -1,12 +1,14 @@
 """
 SSH Service
 Handles SSH connections to Calix E7-20 using Netmiko
+
+When MOCK_MODE=true (see config.py) no network connection is opened. The
+controller talks to a simulated chassis from app/controller/mock_e7.py
+instead, so every route works without lab hardware.
 """
 
 import logging
-from typing import Optional, Dict, Any
-from netmiko import ConnectHandler, NetMikoTimeoutException, NetMikoAuthenticationException
-from paramiko import SSHException
+from typing import Optional, Any
 from app.models.ssh_model import SSHConnectionStatus, SSHCommandResponse
 from config import settings
 from datetime import datetime
@@ -19,17 +21,23 @@ class SSHController:
     """Service for managing SSH connections to Calix E7-20"""
 
     def __init__(self):
-        self.connection = None
+        # A Netmiko connection, or a MockE7Connection in mock mode. Both
+        # expose send_command() and disconnect().
+        self.connection: Optional[Any] = None
         self.connection_status = SSHConnectionStatus(
             connected=False,
             host="",
             username="",
-            port=22
+            port=22,
+            mock_mode=settings.mock_mode
         )
 
     async def connect(self, host: str, username: str, password: str, port: int = 22, timeout: int = 30) -> SSHConnectionStatus:
         """
         Establish SSH connection to Calix E7-20
+
+        In mock mode the credentials are accepted as-is and a simulated
+        device is attached instead of opening a socket.
 
         Args:
             host: Target host IP address
@@ -41,11 +49,44 @@ class SSHController:
         Returns:
             SSHConnectionStatus: Connection status information
         """
-        try:
-            # Disconnect existing connection if any
-            if self.connection:
-                await self.disconnect()
+        # Disconnect existing connection if any
+        if self.connection:
+            await self.disconnect()
 
+        if settings.mock_mode:
+            return self._connect_mock(host, username, port)
+
+        return self._connect_real(host, username, password, port, timeout)
+
+    def _connect_mock(self, host: str, username: str, port: int) -> SSHConnectionStatus:
+        """Attach the simulated E7-20. Opens no network connection."""
+        from app.controller.mock_e7 import MockE7Connection
+
+        logger.warning(f"MOCK_MODE is on: simulating SSH connection to {host}:{port}, no socket opened")
+
+        self.connection = MockE7Connection(host=host)
+
+        # Same sanity check the real path runs after connecting
+        self.connection.send_command("show version", expect_string=r"#")
+
+        self.connection_status = SSHConnectionStatus(
+            connected=True,
+            host=host,
+            username=username,
+            port=port,
+            connected_at=datetime.now(),
+            last_command="show version",
+            mock_mode=True
+        )
+        return self.connection_status
+
+    def _connect_real(self, host: str, username: str, password: str, port: int, timeout: int) -> SSHConnectionStatus:
+        """Open a real SSH session with Netmiko"""
+        # Imported here so mock mode runs without Netmiko/Paramiko installed
+        from netmiko import ConnectHandler, NetMikoTimeoutException, NetMikoAuthenticationException
+        from paramiko import SSHException
+
+        try:
             # Configure connection parameters for Calix E7-20
             device_config = {
                 'device_type': 'hp_procurve',  # Use the HP ProCurve device type
@@ -126,6 +167,9 @@ class SSHController:
     async def execute_command(self, command: str, timeout: int = 60) -> SSHCommandResponse:
         """
         Execute a command on the Calix E7-20
+
+        In mock mode self.connection is a MockE7Connection, so the command
+        is answered with canned E7-style output and never leaves this process.
 
         Args:
             command: Command to execute

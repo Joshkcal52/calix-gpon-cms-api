@@ -1,0 +1,2 @@
+# Only needed when KAFKA_BOOTSTRAP_SERVERS is set (the API and standalone workers)
+aiokafka==0.14.0

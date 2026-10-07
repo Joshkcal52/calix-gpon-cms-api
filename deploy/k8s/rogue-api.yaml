@@ -1,0 +1,175 @@
+# Kubernetes layout: one API Deployment and one worker Deployment per lane
+# (provisioning: ONT activations and changes; legacy: signup and cutover events).
+#
+# NOT yet applied to a cluster. Treat it as the starting design: set the image,
+# point KAFKA_BOOTSTRAP_SERVERS at your brokers, and create the Secrets it reads
+# before using it:
+#
+#   kubectl create secret generic cms-nbi-credentials --from-literal=username=... --from-literal=password=...
+#   kubectl create secret generic rogue-api-keys --from-literal=api-keys='portal:<32+ random chars>,noc:<...>'
+#
+# Every /api/v2 route needs one of those API keys (X-API-Key header). Without
+# API_KEYS the API answers 503 to everything under /api/v2.
+#
+# Create the topics first (partition count = how many commands can run at once
+# per lane, so it is also the cap on parallel CMS work):
+#
+#   kafka-topics.sh --create --topic legacy-gpon-events          --partitions 6  --replication-factor 3
+#   kafka-topics.sh --create --topic rogue.commands.provisioning --partitions 6  --replication-factor 3
+#   kafka-topics.sh --create --topic rogue.commands.dlq          --partitions 1  --replication-factor 3
+#   kafka-topics.sh --create --topic rogue.job-updates           --partitions 6  --replication-factor 3 \
+#       --config retention.ms=604800000
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rogue-api-config
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  KAFKA_TOPIC_PREFIX: "rogue"
+  RELOAD: "false"
+  MOCK_MODE: "false"
+  # The CMS server, reached over plain HTTP by cms-nbi-client. The login comes
+  # from the cms-nbi-credentials Secret (keys: username, password).
+  CMS_HOST: "cms.example.internal"
+  CMS_PORT: "18080"
+  # UNVERIFIED router-side (RG) addressing, empty until checked against your CMS
+  # with python -m app.tools.cms_check (see app/nbi/router_side.py):
+  # CMS_RG_SERVICE_SLOT, CMS_RG_PORT_TYPE, CMS_RG_PORT_ID_ELEMENT, CMS_RG_PORT_MODE_ELEMENT
+  # Signup and cutover events in; migration requests out to the XGS side.
+  LEGACY_EVENTS_TOPIC: "legacy-gpon-events"
+  XGS_MIGRATION_TOPIC: "xgs-migration-requests"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rogue-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: rogue-api}
+  template:
+    metadata:
+      labels: {app: rogue-api}
+    spec:
+      containers:
+        - name: api
+          image: REPLACE_WITH_YOUR_IMAGE
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: {name: rogue-api-config}
+          env:
+            - name: API_KEYS
+              valueFrom: {secretKeyRef: {name: rogue-api-keys, key: api-keys}}
+            - name: CMS_USERNAME
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: username}}
+            - name: CMS_PASSWORD
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: password}}
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rogue-api
+spec:
+  selector: {app: rogue-api}
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+# Provisioning workers. Stateless: scale replicas up to the partition count of
+# rogue.commands.provisioning. Extra replicas beyond that sit idle as spares.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rogue-worker-provisioning
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: rogue-worker, lane: provisioning}
+  strategy:
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 0}  # fewer rebalances during a rollout
+  template:
+    metadata:
+      labels: {app: rogue-worker, lane: provisioning}
+    spec:
+      # On SIGTERM a worker finishes the command in hand, commits, and leaves the
+      # group. This must be longer than the slowest command (activation waits up
+      # to 120s for the ONT). If it is killed anyway the command is redelivered.
+      terminationGracePeriodSeconds: 240
+      containers:
+        - name: worker
+          image: REPLACE_WITH_YOUR_IMAGE
+          command: ["python", "-m", "app.worker"]
+          envFrom:
+            - configMapRef: {name: rogue-api-config}
+          env:
+            - {name: WORKER_LANES, value: "provisioning"}
+            - name: CMS_USERNAME
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: username}}
+            - name: CMS_PASSWORD
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: password}}
+            - {name: WORKER_HEARTBEAT_FILE, value: "/tmp/worker-heartbeat"}
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/worker-heartbeat') > 60)"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
+---
+# Legacy GPON workers: signups and GPON-to-XGS cutovers from legacy-gpon-events.
+# Stateless. Scale replicas up to that topic's partition count.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rogue-worker-legacy
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: rogue-worker, lane: legacy}
+  strategy:
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 0}
+  template:
+    metadata:
+      labels: {app: rogue-worker, lane: legacy}
+    spec:
+      terminationGracePeriodSeconds: 240
+      containers:
+        - name: worker
+          image: REPLACE_WITH_YOUR_IMAGE
+          command: ["python", "-m", "app.worker"]
+          envFrom:
+            - configMapRef: {name: rogue-api-config}
+          env:
+            - {name: WORKER_LANES, value: "legacy"}
+            - name: CMS_USERNAME
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: username}}
+            - name: CMS_PASSWORD
+              valueFrom: {secretKeyRef: {name: cms-nbi-credentials, key: password}}
+            - {name: WORKER_HEARTBEAT_FILE, value: "/tmp/worker-heartbeat"}
+            # Mount your own profile map here and point at it:
+            # - {name: LEGACY_PROFILE_MAP_PATH, value: "/config/profile_map.yml"}
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/worker-heartbeat') > 60)"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
