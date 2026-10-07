@@ -9,7 +9,7 @@ It also covers the rest of an ONT's life (suspend, restore, change, disconnect) 
 ## What it does
 
 - **Provisions an ONT piece by piece.** CMS has no single "set up this customer" command and its API cannot apply a port template, so the ONT, each Ethernet port and each service are sent as separate requests, in order. If CMS rejects a step, the ONT created in that run is removed again.
-- **Runs the lifecycle as jobs that are safe to repeat.** Enable or disable a port or a service, change a service's bandwidth profile, tag action or VLAN, delete a service, delete an ONT. Each change answers `202` with a job you can poll or follow live.
+- **Runs the lifecycle as jobs that are safe to repeat.** Enable or disable a port or a service, change a service's bandwidth profile, tag action, VLAN or peak-rate overrides, delete a service, delete an ONT. Each change answers `202` with a job you can poll or follow live.
 - **Handles ONTs with a built-in router, such as the 844G.** Each Ethernet port is either a plain bridge or belongs to the router. The mode is read from CMS for every port and never assumed from the ONT model.
 - **Exports for cutovers.** One PON port, one card or a whole network, as CSV and JSON laid out for SMx, with the existing serial numbers carried over and blank columns for what only the new side knows. Router-capable ONTs running as bridges are flagged. **Voice is not exported** (see below): every ONT with voice ports is marked `voice: not checked`.
 - **Plans the SMx requests as a dry run.** Nothing is sent to SMx. A profile with no mapping fails that subscriber with a message; nothing is guessed.

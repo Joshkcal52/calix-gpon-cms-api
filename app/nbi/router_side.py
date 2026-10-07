@@ -15,10 +15,27 @@ What the public sources say, and nothing more:
     `default-to-rg`. An Ethernet service (EthSvc) is addressed by
     ont / ontslot / ontethany / ethsvc, and the library documents only three
     ontslot values: 3 Gigabit Ethernet, 4 HPNA Ethernet, 5 Fast Ethernet.
-  - The IDI billing CMS R15.x integration docs: "RG" is a port type that can be
-    enabled and disabled (with an "RG Port" number); when an ONT is linked,
-    each Gigabit and Fast Ethernet port can be set to "RG 1"; data services
-    take a WAN protocol (dhcp or static).
+  - The IDI billing vendor's certified CMS R15.x integration page
+    (help.idibilling.com, "Provisioning - Calix CMS Specifications and
+    Actions"):
+      - "RG" is a port type that can be enabled and disabled (with an "RG
+        Port" number).
+      - "Link E7 GPON ONT" makes these calls: create the ONT; configure the
+        Ethernet ports, one call per port; set the WAN protocol. (This
+        project also sends one request per port; see activate_ont.)
+      - Each Gigabit Ethernet port 1-8 and Fast Ethernet port 1-2 has a
+        "Data Port Default" with the options "Do Not Set / None / RG 1".
+        "The API does not allow the template to be set."
+      - Data services take a "WAN Protocol" (dhcp or static) and, for
+        static, IP Address, Subnet Mask, Gateway and Primary/Secondary DNS.
+        The page shows no XML for any of these.
+      - "When updating an Ethernet Port, the Calix API expects 200 + the
+        port number." See "Port numbers" below.
+
+  READING, NOT CONFIRMED: that a port's "None" is bridge mode and its "RG 1"
+  is router mode (bound to router 1) is a strong reading of the IDI page,
+  but the page does not say so, and it shows no XML. The element that
+  carries it is still unknown (item 3 below).
 
 What neither source shows, and so this project does NOT know:
 
@@ -53,7 +70,17 @@ read back as attachment "unknown"; port mode is read back as "unknown". Nothing
 is guessed, and the mode is never taken from the ONT model or profile.
 
 Setting a port's mode through the NBI is not built at all (item 3, writing):
-on a real CMS such a request is always refused. Item 4 is not built.
+on a real CMS such a request is always refused. Item 4 (WAN protocol, and
+the static IP settings) is not built, because its XML is not known.
+
+Port numbers. IDI's "200 + the port number" would make Ethernet port 1 port
+201. This project, like cms-nbi-client, sends plain numbers 1-8 for ONT
+Ethernet ports (OntEthGe and a service's ontethany). The evidence leans
+towards IDI's rule being about E7 OS xDSL port numbering: the same page lists
+E7 OS xDSL "DSL Port: Values 201-248", and cms-nbi-client used ONT Ethernet
+ports 1-8. That is inferred, not confirmed. python -m app.tools.cms_check on
+a real CMS settles it: it reads OntEthGe 1, 2, ... (a CMS that numbers them
+from 201 answers "not found") and prints the ontethany of every service.
 
 The mock CMS NBI server uses deliberately fake values (MOCK_RG_ADDRESSING) so
 the code path can be tested end to end. They are NOT Calix values.
