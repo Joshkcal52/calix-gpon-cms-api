@@ -22,7 +22,19 @@ LOG_LEVEL=INFO
 # KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 # Run a worker inside the API process (default: yes without Kafka, no with it)
 # WORKER_EMBEDDED=true
-# Simulate playbook runs instead of starting Ansible (default: same as MOCK_MODE)
-# ANSIBLE_MOCK=false
-# Where playbooks reach this API
-# API_BASE_URL=http://127.0.0.1:8000
+# API keys for /api/v2, comma-separated, each "name:key" or a bare key (16+ characters).
+# Required unless MOCK_MODE=true.
+# API_KEYS=portal:change-me-0123456789,noc:change-me-9876543210
+
+# --- Real CMS and the legacy GPON layer ---
+# The CMS server, reached with cms-nbi-client over plain HTTP. Ignored when MOCK_MODE=true.
+# CMS_HOST=cms.example.internal
+# CMS_PORT=18080
+# CMS_USERNAME=nbi
+# CMS_PASSWORD=your_password_here
+# Topic the worker reads signup and cutover events from
+# LEGACY_EVENTS_TOPIC=legacy-gpon-events
+# Topic cutovers publish migration requests to (your XGS/SMx topic, once the schema matches)
+# XGS_MIGRATION_TOPIC=xgs-migration-requests
+# Your legacy-to-XGS profile translations (default: app/legacy/profile_map.yml)
+# LEGACY_PROFILE_MAP_PATH=/path/to/profile_map.yml

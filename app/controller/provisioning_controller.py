@@ -10,9 +10,9 @@ import time
 from typing import Any, Dict, List
 
 from app.models.provisioning_model import (
-    ActivationRequest, OntSpec, OperState, StatusCheckItem, StatusCheckResult
+    ActivationRequest, Attachment, OntSpec, OperState, PortChange, PortState, StatusCheckItem, StatusCheckResult
 )
-from app.nbi.errors import NbiConflictError, NbiError, NbiNotFoundError
+from app.nbi.errors import NbiConflictError, NbiError, NbiNotFoundError, NbiRejectedError
 from app.nbi.gateway import NbiGateway
 from app.worker.runner import JobContext
 
@@ -47,24 +47,31 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     """
     Activate a discovered ONT. Each step is reported as a job event.
 
-    1. Find the ONT: already provisioned, or discovered on a PON
+    1. Find the ONT: already provisioned, or discovered on a PON (with
+       require_discovery=false an ONT can be provisioned before it is installed)
     2. Create the ONT (skipped if it already exists)
-    3. Bind each Ethernet service (VLAN) that is not bound yet
-    4. Wait for the ONT to come online
+    3. Configure each Ethernet port listed in `ports` (only what differs)
+    4. Bind each service (VLAN) that is not bound yet, on an Ethernet port or
+       on the router side
+    5. Wait for the ONT to come online
+
+    CMS applies no port template through its API, so each port setting and
+    each service is sent on its own.
 
     Safe to run again: every step first checks what is already in place, so a
     command that is delivered twice (worker crash, CMS timeout) picks up where
     the first run stopped instead of failing on "already exists".
 
-    If CMS rejects a service, the ONT created by this run is deleted again
+    If CMS rejects a port setting or a service, the ONT created by this run is deleted again
     (unless rollback_on_failure is false), so a failed activation leaves
     nothing half-provisioned. An ONT this run did not create is never deleted.
     A provisioned ONT that is slow to come online is left in place.
     """
-    total_steps = 4
+    total_steps = 5
     serial = request.serial_number
 
     await context.step(1, total_steps, f"Looking for ONT {serial} on {network}")
+    await _check_router_services(context, gateway, network, request)
     ont = await gateway.find_ont_by_serial(network, serial)
     created_here = False
 
@@ -81,12 +88,16 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     else:
         discovered = await gateway.list_discovered_onts(network)
         match = next((d for d in discovered if d.serial_number == serial), None)
-        if match is None:
+        if match is not None:
+            await context.emit("log", f"Found {match.model} on GPON port {match.pon_port}",
+                               model=match.model, pon_port=match.pon_port)
+        elif request.require_discovery:
             raise NbiNotFoundError(
                 f"ONT {serial} has not been discovered on {network}. "
                 f"Check that it is connected and powered.")
-        await context.emit("log", f"Found {match.model} on GPON port {match.pon_port}",
-                           model=match.model, pon_port=match.pon_port)
+        else:
+            await context.emit("log", f"ONT {serial} has not been seen on a PON yet; provisioning it "
+                                      f"ahead of installation")
 
         await context.step(2, total_steps, f"Creating ONT {serial}")
         spec = OntSpec(**request.model_dump(include=set(OntSpec.model_fields)))
@@ -95,16 +106,29 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
         await context.emit("log", f"Created ONT {ont.ont_id}", ont_id=ont.ont_id)
 
     ont_id = ont.ont_id
-    bound = {(s.vlan, s.ont_port) for s in ont.services}
-    missing = [s for s in request.services if (s.vlan, s.ont_port) not in bound]
+    bound = {(s.vlan, s.attachment, s.ont_port) for s in ont.services}
+    missing = [s for s in request.services if (s.vlan, Attachment(s.attach_to), s.ont_port) not in bound]
 
-    await context.step(3, total_steps, f"Binding {len(missing)} service(s) to ONT {ont_id}")
     try:
+        await context.step(3, total_steps, f"Configuring {len(request.ports)} Ethernet port(s) on ONT {ont_id}")
+        if request.ports:
+            current = {p.number: p for p in (await gateway.get_ont_ports(network, ont_id)).ethernet}
+            for config in request.ports:
+                changes = port_differences(current.get(config.port), config.changes().model_dump(exclude_none=True))
+                if not changes:
+                    await context.emit("log", f"Port eth{config.port} already set", port=f"eth{config.port}")
+                    continue
+                await gateway.update_port(network, ont_id, Attachment.ETHERNET, config.port, PortChange(**changes))
+                await context.emit("log", f"Set port eth{config.port}: {_describe(changes)}",
+                                   port=f"eth{config.port}", **changes)
+
+        await context.step(4, total_steps, f"Binding {len(missing)} service(s) to ONT {ont_id}")
         # One at a time: parallel edits to the same ONT are not worth the risk
         for service in missing:
             await gateway.add_ethernet_service(network, ont_id, service)
-            await context.emit("log", f"Bound VLAN {service.vlan} to ONT port {service.ont_port}",
-                               vlan=service.vlan, ont_port=service.ont_port)
+            side = "router port rg" if service.attach_to == "router" else "ONT port "
+            await context.emit("log", f"Bound VLAN {service.vlan} to {side}{service.ont_port}",
+                               vlan=service.vlan, ont_port=service.ont_port, attach_to=service.attach_to)
     except NbiError as e:
         # Roll back only when CMS said no. If CMS is merely unreachable the
         # command is retried and carries on from here.
@@ -112,8 +136,11 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
             await _roll_back(context, gateway, network, ont_id)
         raise
 
-    await context.step(4, total_steps, f"Waiting for ONT {ont_id} to come online")
-    deadline = time.monotonic() + verify_timeout
+    if request.wait_for_online:
+        await context.step(5, total_steps, f"Waiting for ONT {ont_id} to come online")
+    else:
+        await context.step(5, total_steps, f"Checking ONT {ont_id}")
+    deadline = time.monotonic() + (verify_timeout if request.wait_for_online else 0)
     while True:
         ont = await gateway.get_ont(network, ont_id)
         if ont.oper_state == OperState.ONLINE or time.monotonic() >= deadline:
@@ -121,13 +148,51 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
         await asyncio.sleep(poll_seconds)
 
     online = ont.oper_state == OperState.ONLINE
-    if not online:
+    if not online and request.wait_for_online:
         await context.emit("warning",
                            f"ONT {ont_id} is provisioned but did not come online within "
                            f"{verify_timeout:g} seconds. It has been left in place.", ont_id=ont_id)
 
     return {"network": network, "ont_id": ont_id, "serial_number": serial,
-            "online": online, "services": len(ont.services)}
+            "online": online, "services": len(ont.services), "ports_configured": len(request.ports)}
+
+
+def port_differences(current: "PortState | None", wanted: Dict[str, Any]) -> Dict[str, Any]:
+    """The wanted port values that CMS does not already hold"""
+    if current is None:
+        return dict(wanted)
+    return {k: v for k, v in wanted.items() if getattr(current, k) != v}
+
+
+def _describe(changes: Dict[str, Any]) -> str:
+    return ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in changes.items())
+
+
+async def _check_router_services(context: JobContext, gateway: NbiGateway, network: str,
+                                 request: ActivationRequest) -> None:
+    """
+    Before anything is created: a service on the router side needs an ONT
+    profile with a router. Refuse it if the profile says it has none. Only
+    looked up when the request has router-side services.
+    """
+    router_services = [s for s in request.services if s.attach_to == "router"]
+    if not router_services:
+        return
+    profiles = {p.id: p for p in await gateway.list_ont_profiles(network)}
+    profile = profiles.get(request.profile)
+    if profile is None or profile.rg_ports is None:
+        await context.emit("warning", f"Could not tell from CMS whether ONT profile '{request.profile}' has a "
+                                      f"router; sending the router-side service(s) anyway.")
+        return
+    if profile.rg_ports == 0:
+        raise NbiRejectedError(
+            f"ONT profile '{request.profile}' has no router (its rg count is 0), so a service cannot be "
+            f"attached to the router side. Attach it to an Ethernet port instead. Nothing was changed.")
+    for service in router_services:
+        if service.ont_port > profile.rg_ports:
+            raise NbiRejectedError(
+                f"ONT profile '{request.profile}' has {profile.rg_ports} router port(s); there is no "
+                f"rg{service.ont_port}. Nothing was changed.")
 
 
 async def _roll_back(context: JobContext, gateway: NbiGateway, network: str, ont_id: int) -> None:

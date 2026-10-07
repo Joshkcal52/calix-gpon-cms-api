@@ -1,6 +1,6 @@
 """
 Job Models
-Pydantic models for queued work (ONT activations, playbook runs): the command
+Pydantic models for queued work (ONT activations and changes, legacy events): the command
 that travels through the queue, the progress updates workers publish, and the
 job view the API serves.
 """
@@ -13,10 +13,8 @@ from enum import Enum
 
 # Lanes: each has its own queue (Kafka topic) and its own workers
 LANE_PROVISIONING = "provisioning"
-LANE_AUTOMATION = "automation"
 
 ACTION_ACTIVATE_ONT = "ACTIVATE_ONT"
-ACTION_RUN_PLAYBOOK = "RUN_PLAYBOOK"
 
 
 def _now() -> datetime:
@@ -37,10 +35,10 @@ class JobStatus(str, Enum):
 class Command(BaseModel):
     """A unit of work written to the queue. Its id is also the job id."""
     id: str = Field(default_factory=new_id)
-    action: str = Field(..., description="ACTIVATE_ONT or RUN_PLAYBOOK")
-    lane: str = Field(..., description="provisioning or automation")
+    action: str = Field(..., description="ACTIVATE_ONT, CHANGE_ONT, GPON_SIGNUP or XGS_CUTOVER")
+    lane: str = Field(..., description="provisioning or legacy")
     key: str = Field(..., description="Ordering key: commands with the same key run one at a time, in order")
-    kind: str = Field(..., description="Job kind shown to clients: activation or playbook")
+    kind: str = Field(..., description="Job kind shown to clients, e.g. activation, signup, port-change")
     summary: str
     payload: Dict[str, Any]
     created_at: datetime = Field(default_factory=_now)
@@ -72,7 +70,7 @@ class JobEvent(BaseModel):
 
 class Job(BaseModel):
     id: str
-    kind: str = Field(..., description="activation or playbook")
+    kind: str = Field(..., description="activation, signup, cutover, port-change, ...")
     summary: str
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime

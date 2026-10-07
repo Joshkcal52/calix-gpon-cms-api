@@ -1,23 +1,20 @@
 """
 Tests for the v2 integration layer: the CMS gateway and circuit breaker, the
 queue and worker acknowledgement rules, repeat-safe activation, the HTTP API
-with live events, and the Ansible lane. Everything runs in mock mode with the
+with live events. Everything runs in mock mode with the
 in-memory bus; no CMS, Kafka or network is needed.
 """
 
 import asyncio
 import json
-import shutil
 import time
 from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.controller.automation_controller import AnsibleRunner, PlaybookSpec
 from app.controller.provisioning_controller import activate_ont
 from app.messaging.bus import BusUnavailableError, InMemoryBus
-from app.models.automation_model import BaselineAuditVars
 from app.models.job_model import Command, JobStatus
 from app.models.provisioning_model import ActivationRequest, EthernetService, OntSpec
 from app.nbi.breaker import CLOSED, HALF_OPEN, OPEN, CircuitBreaker
@@ -26,7 +23,7 @@ from app.nbi.errors import (
 )
 from app.nbi.gateway import NbiGateway, build_gateway
 from app.nbi.mock_cms import MOCK_NETWORK, MockCmsBackend
-from app.worker.runner import JobError, Worker
+from app.worker.runner import Worker
 from config import settings
 from main import app
 
@@ -482,7 +479,6 @@ def test_activation_refuses_a_serial_already_provisioned_differently():
 @pytest.fixture
 def api(monkeypatch):
     monkeypatch.setattr(settings, "mock_mode", True)
-    monkeypatch.setattr(settings, "ansible_mock", None)
     monkeypatch.setattr(settings, "kafka_bootstrap_servers", None)
     monkeypatch.setattr(settings, "nbi_timeout_seconds", 0.1)
     monkeypatch.setattr(settings, "nbi_max_retries", 0)
@@ -579,7 +575,7 @@ def test_activation_returns_202_and_streams_progress(api):
 
     assert [e for e, _ in events][:2] == ["status", "status"]
     steps = [d["data"]["step"] for e, d in events if e == "step"]
-    assert steps == [1, 2, 3, 4]
+    assert steps == [1, 2, 3, 4, 5]  # find, create, ports, services, verify
     assert [d["seq"] for e, d in events if e != "end"] == list(range(1, len(events)))
     assert events[-2][0] == "result" and events[-2][1]["data"]["online"] is True
 
@@ -639,66 +635,3 @@ def test_activation_waits_out_a_cms_outage_instead_of_failing(api, monkeypatch):
 def test_unknown_job_is_404(api):
     assert api.get("/api/v2/jobs/nope").status_code == 404
     assert api.get("/api/v2/jobs/nope/events").status_code == 404
-
-
-# --- Ansible lane ----------------------------------------------------------------
-
-def test_playbook_allowlist_and_variable_validation(api):
-    playbooks = api.get("/api/v2/automation/playbooks").json()
-    assert [p["name"] for p in playbooks] == ["baseline_audit"]
-    assert "ont_ids" in playbooks[0]["variables_schema"]["properties"]
-
-    run = "/api/v2/automation/playbooks/{}/runs"
-    assert api.post(run.format("../../etc/passwd"), json={}).status_code == 404
-    assert api.post(run.format("not_listed"), json={}).status_code == 404
-
-    bad = api.post(run.format("baseline_audit"),
-                   json={"variables": {"network": MOCK_NETWORK, "ont_ids": [1], "api_url": "http://evil"}})
-    assert bad.status_code == 422
-    assert bad.json()["detail"][0]["loc"] == ["body", "variables", "api_url"]
-    assert api.post(run.format("baseline_audit"),
-                    json={"variables": {"network": MOCK_NETWORK, "ont_ids": [1]}, "limit": "all; rm -rf /"}
-                    ).status_code == 422
-    assert api.get("/api/v2/jobs/").json() == []
-
-
-def test_playbook_run_is_queued_and_streamed(api):
-    accepted = api.post("/api/v2/automation/playbooks/baseline_audit/runs",
-                        json={"variables": {"network": MOCK_NETWORK, "ont_ids": [1, 2, 3]}})
-    assert accepted.status_code == 202 and accepted.json()["job"]["kind"] == "playbook"
-
-    events = sse(api.get(accepted.json()["events_url"]).text)
-    job = events[-1][1]
-
-    assert job["status"] == "succeeded" and job["result"]["simulated"] is True
-    assert any(e == "warning" and "Simulated run" in d["message"] for e, d in events)
-    assert sum(1 for e, d in events if e == "step") == 3
-
-
-@pytest.mark.skipif(shutil.which("ansible-playbook") is None, reason="Ansible is not installed")
-def test_ansible_runner_runs_a_real_playbook_and_reports_tasks(tmp_path):
-    pytest.importorskip("ansible_runner")
-    (tmp_path / "ok.yml").write_text(
-        "- hosts: localhost\n  gather_facts: false\n  tasks:\n"
-        "    - name: Say hello\n      ansible.builtin.debug:\n        msg: \"hello {{ network }}\"\n"
-        "    - name: Check the list\n      ansible.builtin.assert:\n        that: ont_ids | length == 2\n")
-    (tmp_path / "bad.yml").write_text(
-        "- hosts: localhost\n  gather_facts: false\n  tasks:\n"
-        "    - name: Always fails\n      ansible.builtin.fail:\n        msg: audit found a problem\n")
-    (tmp_path / "hosts.yml").write_text("all:\n  hosts:\n    localhost:\n      ansible_connection: local\n")
-    runner = AnsibleRunner(timeout=120, project_dir=tmp_path, inventory=tmp_path / "hosts.yml")
-    variables = {"network": MOCK_NETWORK, "ont_ids": [1, 2]}
-    emitted = []
-
-    def emit(type, message, /, **data):
-        emitted.append((type, message))
-
-    ok = asyncio.run(runner.run(PlaybookSpec("ok", "ok.yml", "", BaselineAuditVars), variables, None, "job1", emit))
-    assert ok["status"] == "successful" and ok["rc"] == 0
-    assert ok["stats"]["ok"] == {"localhost": 2}
-    assert ("step", "TASK [Say hello]") in emitted and ("log", "ok: localhost") in emitted
-
-    with pytest.raises(JobError) as failed:
-        asyncio.run(runner.run(PlaybookSpec("bad", "bad.yml", "", BaselineAuditVars), variables, None, "job2", emit))
-    assert failed.value.code == "playbook_failed" and failed.value.retryable is False
-    assert "audit found a problem" in failed.value.message
