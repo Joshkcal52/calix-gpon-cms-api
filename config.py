@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     # XGS/SMx topic only once XgsMigrationRequest matches that topic's schema.
     xgs_migration_topic: str = "xgs-migration-requests"
     legacy_profile_map_path: str = str(Path(__file__).resolve().parent / "app" / "legacy" / "profile_map.yml")
+    # Mapping for SMx cutover plans (dry run, nothing is sent): app/legacy/smx.py
+    smx_map_path: str = str(Path(__file__).resolve().parent / "app" / "legacy" / "smx_map.yml")
 
     # --- Workers ---
     # Run a worker inside the API process. Default: yes without Kafka, no with it

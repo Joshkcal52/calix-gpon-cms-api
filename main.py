@@ -14,7 +14,7 @@ import logging
 
 # Import routes
 from app.routes import ssh_routes, ont_routes, hp_routes
-from app.routes import provisioning_routes, job_routes, automation_routes, legacy_routes, lifecycle_routes
+from app.routes import provisioning_routes, job_routes, automation_routes, legacy_routes, lifecycle_routes, cutover_routes
 
 # Import services for the v2 integration layer
 from app.controller.automation_controller import build_playbook_runner
@@ -102,6 +102,7 @@ app.include_router(hp_routes.router)
 app.include_router(provisioning_routes.router)
 app.include_router(legacy_routes.router)
 app.include_router(lifecycle_routes.router)
+app.include_router(cutover_routes.router)
 app.include_router(job_routes.router)
 app.include_router(automation_routes.router)
 

@@ -67,6 +67,15 @@ logger = logging.getLogger(__name__)
 ONT_SLOT = "3"  # Gigabit Ethernet, per the library's docstrings (4 is HPNA, 5 is Fast Ethernet)
 SOAP_NS = "http://www.w3.org/2003/05/soap-envelope"
 
+# Reply values whose meaning is inferred, not taken from the library. Their raw
+# values are collected in `observed` so a check against a real CMS shows them.
+OBSERVED_FIELDS: Dict[str, tuple] = {
+    "Ont": ("op-stat", "admin"),
+    "EthSvc": ("admin", "out-tag", "in-tag"),
+    "OntEthGe": ("admin",),
+    "OntProf": ("geth", "rg", "default-to-rg"),
+}
+
 # Every reply field the code knows by name: the ones it reads, plus the ones the
 # library itself names in its requests and attr-lists. Anything else in a reply
 # is reported as unrecognised.
@@ -260,6 +269,7 @@ class CmsNbiClientBackend:
         self._router = router  # None: the router side is not verified, see app/nbi/router_side.py
         self.unrecognised: Dict[str, Set[str]] = defaultdict(set)  # reply fields nobody here knows
         self.slots_seen: Set[str] = set()  # every EthSvc ontslot value read, for cms_check
+        self.observed: Dict[str, Set[str]] = defaultdict(set)  # "Ont.op-stat" -> raw values seen
         self._host, self._port = host, str(port)
         self._username, self._password = username, password
         self._timeout = timeout
@@ -568,6 +578,8 @@ class CmsNbiClientBackend:
             known = {"type", "id", "admin"}
         for obj in found:
             self.unrecognised[object_type].update(key for key in obj if key not in known and not key.startswith("@"))
+            for field in OBSERVED_FIELDS.get(object_type, ()):
+                self.observed[f"{object_type}.{field}"].add(_scalar(obj.get(field)) or "(empty)")
         return found
 
     # --- Router side and raw requests ------------------------------------------

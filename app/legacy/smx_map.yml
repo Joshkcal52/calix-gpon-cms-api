@@ -1,0 +1,47 @@
+# How legacy CMS values become SMx values in a cutover plan (python -m app.legacy.smx).
+# Point SMX_MAP_PATH at your own copy.
+#
+# THESE ENTRIES ARE DEMO VALUES that match the simulated CMS. Replace every one.
+# On a real CMS the bandwidth profile and tag action keys are numeric IDs.
+#
+# A subscriber whose CMS data uses a value not listed here fails with a message
+# naming it, and gets no requests. Nothing is guessed.
+
+# CMS bandwidth profile -> SMx Policy Map
+bandwidth_profiles:
+  "RES-1G": "DEMO-POLICY-RESI-1G"
+  "VOICE": "DEMO-POLICY-VOICE"
+
+# CMS service tag action -> how the SMx VLAN and c-VLAN are set.
+#   vlan:   outer (the service's outer tag on CMS) or a fixed number
+#   c_vlan: inner (the service's inner tag on CMS), none, or a fixed number
+tag_actions:
+  "1": {vlan: outer, c_vlan: none}
+  "2": {vlan: outer, c_vlan: none}
+
+# CMS port (eth1..eth8, rg1) -> SMx ONT Port ID on the new ONT.
+# Depends on the new ONT's model. Router-side (rg1) services caused trouble in
+# manual cutovers: decide deliberately where each one goes.
+ont_ports:
+  eth1: "DEMO-PORT-1"
+  eth2: "DEMO-PORT-2"
+  rg1: "DEMO-PORT-RG"
+
+# CMS admin state -> SMx Admin State
+admin_states:
+  enabled: "DEMO-ENABLED"
+  disabled: "DEMO-DISABLED"
+
+# SMx Service Name for each data service. Placeholders: {account}, {port}, {index}
+service_name: "{account}-{port}-{index}"
+
+# Passed through unchanged as SMx parameters on every request of that kind
+subscriber_defaults:
+  Add-Update Mode: Add-Only
+ont_defaults:
+  Add-Update Mode: Add-Only
+  Type: Residential
+  ONT Type: Local
+  Auto-Generate: true
+data_service_defaults:
+  Add-Update Mode: Add-Only
