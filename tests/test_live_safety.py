@@ -126,16 +126,54 @@ def test_a_service_added_during_the_delete_is_not_removed_with_the_ont():
     asyncio.run(scenario())
 
 
-def test_rollback_still_removes_the_ont_this_run_created():
-    # The ONT was created by this run, so the rollback deletes it with force, services and all
+def rejected_request():
+    """The second service is refused by CMS, after the ONT and the first service are in place"""
+    return ActivationRequest(serial_number=NEW_SERIAL, profile="844G-1", wait_for_online=False, services=[
+        EthernetService(vlan=100, bandwidth_profile="RES-1G", tag_action="1"),
+        EthernetService(vlan=100, bandwidth_profile="NOPE-BW", tag_action="1", ont_port=2)])
+
+
+def test_rollback_removes_the_ont_this_run_created_without_force():
+    # The service this run added is deleted, then the ONT without CMS's force
     async def scenario():
         gateway, backend = make_gateway()
-        request = ActivationRequest(serial_number=NEW_SERIAL, profile="844G-1", wait_for_online=False, services=[
-            EthernetService(vlan=100, bandwidth_profile="RES-1G", tag_action="1"),
-            EthernetService(vlan=100, bandwidth_profile="NOPE-BW", tag_action="1", ont_port=2)])
+        real_delete_ont, forces = backend.delete_ont, []
+
+        async def recording_delete_ont(network, ont_id, *, force):
+            forces.append(force)
+            await real_delete_ont(network, ont_id, force=force)
+
+        backend.delete_ont = recording_delete_ont
         with pytest.raises(NbiRejectedError, match="NOPE-BW"):
-            await activate_ont(Recorder(), gateway, NET, request, verify_timeout=0, poll_seconds=0)
+            await activate_ont(Recorder(), gateway, NET, rejected_request(), verify_timeout=0, poll_seconds=0)
         assert all(o.state.serial_number != NEW_SERIAL for o in backend._onts.values())
+        assert forces == [False]
+
+    asyncio.run(scenario())
+
+
+def test_rollback_leaves_an_ont_another_run_is_provisioning():
+    # The same command running twice at once: while this run binds its services, the other run
+    # binds one this run then finds already there. CMS refuses this run's add, and the rollback
+    # must not delete the ONT the other run is finishing.
+    async def scenario():
+        gateway, backend = make_gateway()
+        real_add = backend.add_ethernet_service
+
+        async def other_run_gets_there_first(network, ont_id, service):
+            if service.ont_port == 2:
+                await real_add(network, ont_id, service.model_copy(update={"bandwidth_profile": "RES-1G"}))
+            await real_add(network, ont_id, service)
+
+        backend.add_ethernet_service = other_run_gets_there_first
+        recorder = Recorder()
+        request = rejected_request()
+        request.services[1].bandwidth_profile = "RES-1G"
+        with pytest.raises(NbiConflictError, match="already has a service"):
+            await activate_ont(recorder, gateway, NET, request, verify_timeout=0, poll_seconds=0)
+        ont = next(o.state for o in backend._onts.values() if o.state.serial_number == NEW_SERIAL)
+        assert sorted(s.ont_port for s in ont.services) == [1, 2]
+        assert any(m.startswith("Not rolled back") for m in recorder.messages)
 
     asyncio.run(scenario())
 

@@ -27,10 +27,12 @@ to be typed back before the first write, unless --yes is given.
 
 If a step fails after the ONT was created, the ONT is deleted with CMS's
 force to leave the lab as it was (it was created by this run, so nothing
-else is on it), and the report says so. Step 6 failing while that cleanup
-works is itself a finding: it means CMS refuses a delete without force even
-when no service is left, and app/controller/lifecycle_controller.py needs
-changing before the API's ONT delete can work.
+else is on it), and the report says so. Step 2 or 6 failing while that
+cleanup works is itself a finding: both delete the way the API does (the
+services, then the ONT without CMS's force), so it means CMS refuses a
+delete without force even when no service is left, and the API's ONT delete
+(app/controller/lifecycle_controller.py) and rollback
+(app/controller/provisioning_controller.py) need changing before they can work.
 
 With MOCK_MODE=true it runs against the simulated CMS, as a rehearsal.
 

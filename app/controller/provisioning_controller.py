@@ -7,7 +7,7 @@ within the request, and the multi-step activation that a worker runs.
 import asyncio
 import logging
 import time
-from typing import Any, Dict, FrozenSet, Iterable, List, Optional
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from app.models.provisioning_model import (
     ActivationRequest, Attachment, EthernetService, OntSpec, OperState, PortChange, PortState, ProvisionedService,
@@ -82,8 +82,9 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
 
     If CMS rejects a port setting or a service, the ONT created by this run is deleted again
     (unless rollback_on_failure is false), so a failed activation leaves
-    nothing half-provisioned. An ONT this run did not create is never deleted.
-    A provisioned ONT that is slow to come online is left in place.
+    nothing half-provisioned. An ONT this run did not create is never deleted,
+    and neither is one that has picked up a service this run did not add (see
+    _roll_back). A provisioned ONT that is slow to come online is left in place.
     """
     total_steps = 5
     serial = request.serial_number
@@ -132,6 +133,7 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     # Already bound, but not as the request asks: changed in place rather than skipped
     changed = [(bound[s.identity()], d) for s in request.services
                if s.identity() in bound and (d := service_differences(bound[s.identity()], s))]
+    added = set()  # identities of the services this run bound, the only ones a rollback deletes
 
     try:
         await context.step(3, total_steps, f"Configuring {len(request.ports)} Ethernet port(s) on ONT {ont_id}")
@@ -156,6 +158,7 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
         # One at a time: parallel edits to the same ONT are not worth the risk
         for service in missing:
             await gateway.add_ethernet_service(network, ont_id, service)
+            added.add(service.identity())
             side = "router port rg" if service.attach_to == "router" else "ONT port "
             what = f"VLAN {service.vlan}" if service.vlan is not None else f"tag action {service.tag_action} (no VLAN)"
             await context.emit("log", f"Bound {what} to {side}{service.ont_port}",
@@ -165,7 +168,7 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
         # Roll back only when CMS said no. If CMS is merely unreachable the
         # command is retried and carries on from here.
         if not e.retryable and created_here and request.rollback_on_failure:
-            await _roll_back(context, gateway, network, ont_id)
+            await _roll_back(context, gateway, network, ont_id, added)
         raise
 
     if request.wait_for_online:
@@ -243,13 +246,35 @@ async def _check_router_services(context: JobContext, gateway: NbiGateway, netwo
                 f"rg{service.ont_port}. Nothing was changed.")
 
 
-async def _roll_back(context: JobContext, gateway: NbiGateway, network: str, ont_id: int) -> None:
+async def _roll_back(context: JobContext, gateway: NbiGateway, network: str, ont_id: int,
+                     added: Set[Tuple[Any, ...]]) -> None:
+    """
+    Delete the ONT this run created, the way a DELETE does: the services this run added one by
+    one, then the ONT without CMS's force. A command can run twice at once (Kafka redelivers it
+    after a rebalance, or two worker groups take it), so the ONT is read again first. If it holds
+    a service this run did not add, another run is provisioning it and it is left alone. A
+    service added after that read, or a voice service this API cannot see, makes CMS refuse the
+    delete instead of removing it.
+    """
     await context.emit("warning", f"CMS rejected the activation; rolling back by deleting ONT {ont_id}",
                        ont_id=ont_id)
     try:
-        # This run created the ONT, so nothing else is on it: force takes the services it added
-        await gateway.delete_ont(network, ont_id, force=True)
+        ont = await gateway.get_ont(network, ont_id)
+        others = [s for s in ont.services if s.identity() not in added]
+        if others:
+            listed = ", ".join(f"{port_name(s.attachment, s.ont_port)} service {s.service_index}" for s in others)
+            await context.emit("warning",
+                               f"Not rolled back: ONT {ont_id} also has service(s) this run did not add "
+                               f"({listed}), so another job may be provisioning it. It has been left in place.",
+                               ont_id=ont_id, rollback_skipped=True)
+            return
+        for service in ont.services:
+            await gateway.delete_service(network, ont_id, service.attachment, service.ont_port,
+                                         service.service_index)
+        await gateway.delete_ont(network, ont_id, force=False)
         await context.emit("log", f"Rolled back: ONT {ont_id} deleted", ont_id=ont_id)
+    except NbiNotFoundError:
+        await context.emit("log", f"ONT {ont_id} is already gone; nothing to roll back", ont_id=ont_id)
     except NbiError as e:
         logger.error(f"Rollback of ONT {ont_id} on {network} failed: {e.message}")
         await context.emit("warning",
