@@ -25,7 +25,7 @@ curl -s $A/subscribers/SUB-1003/smx-plan                       # SMx requests fo
 
 In the export, ONTs 3, 4, 7 and others are 844Gs whose ports all run as bridges: they are flagged "keep it a bridge". Every simulated profile has voice ports, so every ONT reads `voice: not checked`.
 
-## What is proven (against the mock, by the test suite on Python 3.10 and 3.12)
+## What is proven (against the mock, by the test suite on Python 3.10 and 3.12, run by CI on every push)
 
 - Every CMS operation through the project's own CMS client (`app/nbi/client.py`) over real SOAP to the mock NBI server. Each sends the same requests the cms-nbi-client library sent, recorded before the library was removed: a test compares them. HTTPS is tested with a private CA (the certificate is checked by default), and so is paging, against the mock's.
 - Every change is repeat-safe (each test runs it twice). A failed provisioning deletes the ONT it created. A service without a VLAN is known by its port and tag action, so a repeat neither duplicates nor skips one.
@@ -34,12 +34,12 @@ In the export, ONTs 3, 4, 7 and others are 844Gs whose ports all run as bridges:
 
 ## What is not proven
 
-- **Nothing has touched a real CMS, SMx, Sonar or production Kafka cluster** (only one demo broker, with no replication). Request shapes come from cms-nbi-client; any reply field it did not parse is inferred (list in ARCHITECTURE.md). HTTPS and paging have only met the mock server.
-- **The router side of the 844G is not known**: how router-side services and ports are addressed, and how CMS shows whether each Ethernet port is in bridge or router mode. IDI's docs give each port a "None / RG 1" setting; reading that as bridge/router is likely but unconfirmed, and its XML is unknown. WAN protocol and static IP are not built (no XML anywhere). All of it sits behind `app/nbi/router_side.py` and is off until configured: router writes are refused, modes read as `unknown`, and the SMx plan fails rather than default anything. The NOC's lesson: 844Gs that ran as bridges were rebuilt as router/ONT combos, and customers ended up with double NAT.
-- **Port numbers and VLAN rules.** IDI's "200 + the port number" most likely means E7 OS xDSL ports (201–248), not ONT Ethernet ports, which are sent as 1–8 (inferred; `cms_check` settles it). Which tag actions need an outer VLAN is set on each CMS; the mock's rule is invented.
-- **Whether customers keep their ONT through a cutover is not settled.** Both are supported: the export carries the existing serial, and a replacement serial can be filled in.
-- **Voice is not read at all.** The voice status comes from the profile's `pots` attribute, whose meaning as a port count is inferred (`cms_check` prints its raw values). So deleting an ONT whose profile has voice ports needs `voice_checked=true`, and the ONT is deleted without CMS's force so that CMS should refuse it while a voice service is left. That CMS refuses it is not confirmed.
-- SMx parameter names come from the IDI billing docs, not from SMx. All mapping files hold demo values. The Kubernetes manifests have never been applied.
+Every open risk, guess and gap is listed in **[docs/KNOWN_UNKNOWNS.md](docs/KNOWN_UNKNOWNS.md)**. The headlines:
+
+- **Nothing has touched a real CMS, SMx, Sonar or production Kafka cluster.** Reply fields cms-nbi-client never parsed are guessed, and a wrong guess reads as empty ("no services"), not as an error. **The receiving team owns the first CMS check**: nobody on this project has had CMS access (what it needs is on that page).
+- **The 844G router side is not known** (bridge or router per port, router-side services, WAN protocol): off until configured in `app/nbi/router_side.py`. **Voice is not read**, so an ONT with voice ports is only deleted with `voice_checked=true`, and never with CMS's force; that CMS then refuses a delete while a service is left is not confirmed.
+- **Before it goes live**: set `BANDWIDTH_PROFILES` from CMS, `API_KEYS` and a real image; there is no shared circuit breaker, no metrics and no limit on queued jobs. Each change records the API key that asked for it (`requested_by`, audit lines in `app/audit.py`).
+- **No LICENSE yet**, and cms-nbi-client is GPL-3.0; **most of the code was written by Claude** and should be reviewed as unfamiliar code. Both are explained on that page.
 
 ## First three things to do with a real CMS
 

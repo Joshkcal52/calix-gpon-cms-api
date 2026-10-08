@@ -207,6 +207,6 @@ Inferred, not verified, because nobody on this project has a real CMS:
 - **Encryption.** Set `CMS_SCHEME=https` (and the HTTPS port) if your CMS offers it: with the default `http` the CMS login crosses the network unencrypted. Kafka is plaintext with no credentials.
 - **Paging and HTTPS have only met the mock.** If `cms_check` lists fewer ONTs than CMS holds, or HTTPS fails against a real CMS, start there.
 - **API keys** are shared secrets in an environment variable. Browsers' EventSource cannot send them, so a browser following a job's SSE stream needs a proxy that adds the key.
-- **Job history** is rebuilt from the updates topic on start, so it is bounded by that topic's retention.
+- **Job history** is rebuilt from the updates topic on start, so it is bounded by that topic's retention. **Who asked for each change** is kept on the job (`requested_by`, the API key's name) and in one JSON line per accepted, succeeded and failed change on the `gpon_cms.audit` logger (and `AUDIT_LOG_PATH` if set): ship those lines somewhere that keeps them. See `app/audit.py`.
 - **Dead letters** are parked with their error; there is no tool yet to list or replay them.
 - **One breaker per process.** Workers do not share breaker state.
