@@ -4,6 +4,9 @@ A provisioning API for legacy Calix GPON through CMS (R15.x, SOAP over HTTP).
 """
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -145,6 +148,33 @@ async def bus_error_handler(request: Request, exc: BusUnavailableError) -> JSONR
     """The queue did not accept the command, so nothing was queued"""
     return JSONResponse(status_code=exc.http_status, content={"error": exc.to_dict()},
                         headers={"Retry-After": "5"})
+
+
+# Codes for errors raised as plain HTTP errors (FastAPI's own 404s and 405s, and HTTPException in routes)
+HTTP_ERROR_CODES = {400: "bad_request", 404: "not_found", 405: "method_not_allowed", 409: "conflict",
+                    422: "invalid_request", 503: "unavailable"}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Plain HTTP errors in the same shape as every other error, not FastAPI's {"detail": ...}"""
+    error = {"code": HTTP_ERROR_CODES.get(exc.status_code, f"http_{exc.status_code}"),
+             "message": str(exc.detail), "retryable": exc.status_code == 503}
+    return JSONResponse(status_code=exc.status_code, content={"error": error}, headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """
+    Request validation in the same shape: {"error": {"code": "invalid_request",
+    "message", "retryable": false, "details": [FastAPI's list of problems]}}
+    """
+    problems = exc.errors()
+    summary = "; ".join(f"{'.'.join(str(part) for part in p.get('loc', ()))}: {p.get('msg')}" for p in problems[:5])
+    more = f" (and {len(problems) - 5} more)" if len(problems) > 5 else ""
+    return JSONResponse(status_code=422, content={"error": {
+        "code": "invalid_request", "message": f"The request is not valid: {summary}{more}", "retryable": False,
+        "details": jsonable_encoder(problems)}})
 
 
 @app.get("/")

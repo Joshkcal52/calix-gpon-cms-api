@@ -6,7 +6,7 @@ MOCK_MODE=true. It models one network of fourteen ONTs on two PONs
 not provisioned yet.
 
 It checks the things a real CMS would refuse (duplicate ONT IDs, serial
-numbers already in use, VLANs that do not exist, a missing or unwanted outer
+numbers already in use, VLANs and bandwidth profiles that do not exist, a missing or unwanted outer
 VLAN under the simulation's own tag-action rule) and can simulate an outage
 so the circuit breaker can be exercised.
 
@@ -39,6 +39,7 @@ MOCK_PROFILE_DETAILS = {
 }
 MOCK_ONT_PROFILES = tuple(MOCK_PROFILE_DETAILS)
 MOCK_SECURITY_PROFILES = {str(n) for n in range(1, 17)}
+MOCK_BANDWIDTH_PROFILES = ("RES-1G", "VOICE")  # invented names; on a real CMS they are numeric IDs
 
 # SIMULATION RULE, NOT A CALIX FACT. IDI's CMS R15.x docs say the outer VLAN is optional and is
 # left out "if the value is not required by Service Tag Action", but not which tag actions those
@@ -193,6 +194,7 @@ class MockCmsBackend:
         attachment = Attachment(service.attach_to)
 
         self._check_tag_vlan(network, service.tag_action, service.vlan)
+        self._check_bandwidth_profile(network, service.bandwidth_profile)
         self._check_port(ont, attachment, service.ont_port)
         name = port_name(attachment, service.ont_port)
         for existing in ont.state.services:
@@ -255,6 +257,7 @@ class MockCmsBackend:
         current = ont.state.services[position]
         updated = current.model_copy(update=change.model_dump(exclude_none=True))
         self._check_tag_vlan(network, updated.tag_action, updated.vlan)
+        self._check_bandwidth_profile(network, updated.bandwidth_profile)
         ont.state.services[position] = updated
 
     async def list_ont_profiles(self, network: str) -> List[OntProfile]:
@@ -281,6 +284,7 @@ class MockCmsBackend:
         await self._exchange(network)
         ont = self._require(network, ont_id)
         self._check_tag_vlan(network, service.tag_action, service.vlan)
+        self._check_bandwidth_profile(network, service.bandwidth_profile)
         self._check_port(ont, service.attachment, service.ont_port)
         position = self._service_position(ont, service.ont_port, service.service_index, service.attachment)
         label = (f"Service {service.service_index} on ONT {ont_id} port "
@@ -390,6 +394,13 @@ class MockCmsBackend:
             raise NbiRejectedError(f"Tag action {tag_action or '(none)'} needs an outer VLAN, and none was given. "
                                    f"In the simulated CMS only tag actions {' and '.join(MOCK_TAG_ACTIONS_NO_VLAN)} take none.")
         cls._check_vlan(network, vlan)
+
+    @staticmethod
+    def _check_bandwidth_profile(network: str, profile: Optional[str]) -> None:
+        if profile not in MOCK_BANDWIDTH_PROFILES:
+            raise NbiRejectedError(
+                f"Bandwidth profile '{profile}' does not exist on {network}. "
+                f"Available bandwidth profiles: {', '.join(MOCK_BANDWIDTH_PROFILES)}.")
 
     @staticmethod
     def _check_port(ont: _MockOnt, attachment: Attachment, number: int) -> None:
