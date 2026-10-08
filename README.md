@@ -102,6 +102,18 @@ python -m app.legacy.smx --input ./cutover/<file>.services.csv --output plan.jso
 python -m app.legacy.snapshot --compare ./cutover/<file>.snapshot.yml
 ```
 
+## Trying it at scale (mocks only)
+
+`MOCK_PON_SIZE` (or `python main.py --mock --pon-size 64`) fills one simulated PON with up to 64 discovered ONTs, a mix of 844G, 812G and 716GE-I. `tools/sim_signups.py` signs up a customer per ONT through the API, reads everything back, sends the set again to check nothing new is sent, runs a lifecycle round, and on the E7 path counts the CLI commands and injects session faults. It talks to the mocks only.
+
+```bash
+python tools/sim_signups.py --backend cms --customers 64
+python tools/sim_signups.py --backend e7-cli --customers 64 --e7-latency 0.05
+python tools/sim_signups.py --backend e7-cli --customers 32 --faults
+```
+
+The numbers and what they showed are in [docs/SIM_RESULTS.md](docs/SIM_RESULTS.md). They check the API's behaviour, not real CMS or E7 speed.
+
 ## Connecting to a real CMS
 
 ```bash
@@ -187,8 +199,9 @@ app/
   tools/        read-only CMS check and E7 capture
   models/       request and response models
 deploy/         Dockerfile, demo, Kubernetes manifests
-docs/           architecture
+docs/           architecture, the E7 CLI, simulation results
 tests/
+tools/          sim_signups.py: signups at scale against the mocks
 main.py         the API
 config.py       settings
 ```
@@ -197,6 +210,8 @@ config.py       settings
 
 - [HANDOFF.md](HANDOFF.md): one page on what this is, what is proven, and where to start with a real CMS
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the design, the delivery rules, and the full list of what is inferred
+- [docs/E7_CLI.md](docs/E7_CLI.md): provisioning through each E7's command line, and what is unverified
+- [docs/SIM_RESULTS.md](docs/SIM_RESULTS.md): 32 and 64 simulated customers on both backends, with fault injection
 - [deploy/demo/README.md](deploy/demo/README.md): the multi-process demo
 
 ## Credits
