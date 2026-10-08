@@ -48,7 +48,8 @@ async def lifespan(app: FastAPI):
     check_configuration(settings)
     bus = build_bus(settings)
     await bus.start()
-    gateway = build_gateway(settings)
+    gateway_settings, mock_e7_server = await start_mock_e7_if_needed(settings)
+    gateway = build_gateway(gateway_settings)
     jobs = JobStore(bus)
     await jobs.start()
 
@@ -66,7 +67,7 @@ async def lifespan(app: FastAPI):
             max_command_age=settings.command_max_age_seconds)
         app.state.worker = worker
         worker_task = asyncio.create_task(worker.run(), name="embedded-worker")
-    logger.info(f"Queue: {bus.name}. CMS backend: {gateway.backend.name}. "
+    logger.info(f"Queue: {bus.name}. Backend: {gateway.backend.name}. "
                 f"Embedded worker: {'yes' if worker_task else 'no'}")
 
     yield
@@ -78,6 +79,23 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(worker_task, return_exceptions=True)
     await jobs.stop()
     await gateway.close()
+    if mock_e7_server is not None:
+        mock_e7_server.close()
+
+
+async def start_mock_e7_if_needed(settings):
+    """
+    MOCK_MODE with NBI_BACKEND=e7-cli and no E7_NODES: start a mock E7 (app/nbi/mock_e7.py) on a
+    free local port, and return settings pointing the gateway at it, with the server to close later.
+    """
+    if not (settings.mock_mode and settings.nbi_backend == "e7-cli" and not settings.e7_nodes):
+        return settings, None
+    from app.nbi import mock_e7
+    server, port, _ = await mock_e7.serve(0)
+    logger.info(f"Mock E7 {mock_e7.NODE} listening on 127.0.0.1:{port}")
+    return settings.model_copy(update={
+        "e7_nodes": f"{mock_e7.NODE}=127.0.0.1:{port}", "e7_username": "e7", "e7_password": "e7",
+        "e7_known_hosts": "none"}), server
     await bus.stop()
 
 
@@ -198,6 +216,23 @@ async def health_check() -> Dict[str, str]:
 
 # This allows us to run the app directly with: python main.py
 if __name__ == "__main__":
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="Run the gpon-cms API")
+    parser.add_argument("--backend", choices=["auto", "cms", "e7-cli"],
+                        help="provision through the CMS NBI (cms) or each E7's CLI (e7-cli); overrides NBI_BACKEND")
+    parser.add_argument("--mock", action="store_true",
+                        help="use the simulated CMS, or with --backend e7-cli a mock E7; same as MOCK_MODE=true")
+    args = parser.parse_args()
+    # Set on the shared settings object (uvicorn imports main again in this process) and in the
+    # environment (for the fresh process RELOAD=true starts)
+    if args.backend:
+        settings.nbi_backend = args.backend
+        os.environ["NBI_BACKEND"] = args.backend
+    if args.mock:
+        settings.mock_mode = True
+        os.environ["MOCK_MODE"] = "true"
     uvicorn.run(
         "main:app",
         host=settings.host,

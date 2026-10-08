@@ -153,7 +153,7 @@ Every error reaches the client, or the failed job, in one shape: CMS failures, A
 
 | Mode | How | Use |
 |---|---|---|
-| Single process | `MOCK_MODE=true python main.py` | Development. In-process queue, embedded worker, simulated CMS. No API key needed unless `API_KEYS` is set (then it is enforced, as it always is with `MOCK_MODE` off). Jobs are lost on restart. |
+| Single process | `MOCK_MODE=true python main.py` | Development. In-process queue, embedded worker, simulated CMS (or a mock E7 with `--backend e7-cli`). No API key needed unless `API_KEYS` is set (then it is enforced, as it always is with `MOCK_MODE` off). Jobs are lost on restart. |
 | Demo topology | `deploy/demo/` (Docker Compose, or four local processes) | Kafka, API, worker, mock CMS NBI server and a stand-in XGS listener. |
 | Production shape | API: `uvicorn main:app`. Workers: `WORKER_LANES=provisioning` and `WORKER_LANES=legacy python -m app.worker`. `CMS_HOST` and `API_KEYS` set. | See `deploy/k8s/gpon-cms.yaml`. |
 
@@ -173,6 +173,10 @@ Every error reaches the client, or the failed job, in one shape: CMS failures, A
 **Where the request shapes come from.** This project used to send its requests through [cms-nbi-client](https://github.com/somenetworking/CMS-NBI-Client) 0.1.0 by somenetworking, and that project is the reference the request shapes were learned from. Before it was removed, every request it sent for every operation used here was recorded against the mock NBI server (`tests/fixtures/cms_nbi_client_requests.json`). The client was written fresh from those recordings, and `tests/test_cms_client.py` checks that it sends the same requests: the same URL, headers and XML (compared in canonical form, so indentation aside), apart from the random message and session IDs. No code from the library is used.
 
 Two requests always differed from the library's, on purpose: its Ethernet port update raised `KeyError` and its service update silently dropped tag-action and bandwidth-profile changes, so this project built those two itself, in the shape the library meant to send. Where the new client goes beyond the library, it is untested against a real CMS: paging (the library's `show-ont` paging could not have handled a page holding more than one ONT, and the mock never paged), HTTPS (the library had none), and escaping of the login (the library did not escape it).
+
+## The E7 CLI backend
+
+For a CMS without the NBI licence, `app/nbi/e7_backend.py` provisions through each E7's command line over SSH (`app/nbi/e7_session.py`: one session per E7, one command at a time, dropped after a timeout, logged in again if the E7 closed it while idle). It implements the same `NbiBackend` protocol, so the gateway and everything above it are unchanged. Command output is read by the lenient parsers in `app/nbi/e7_parse.py`, which are unverified because Calix publishes almost no sample output. Details, settings and the checklist are in [E7_CLI.md](E7_CLI.md).
 
 ## What is verified, and what is not
 

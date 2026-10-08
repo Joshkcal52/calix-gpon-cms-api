@@ -13,3 +13,6 @@ PyYAML==6.0.1
 
 # The CMS client (app/nbi/client.py), HTTP and HTTPS. Also FastAPI's TestClient.
 httpx==0.25.2
+
+# The E7 CLI backend (app/nbi/e7_backend.py): SSH to each E7 when E7_NODES is set. Also the mock E7's SSH server.
+asyncssh==2.24.1

@@ -42,6 +42,22 @@ LOG_LEVEL=INFO
 # CMS_RG_PORT_TYPE=OntRg
 # CMS_RG_PORT_ID_ELEMENT=ontrg
 # CMS_RG_PORT_MODE_ELEMENT=intf
+
+# --- Instead of CMS: each E7's command line over SSH (a CMS without the NBI licence) ---
+# NAME=host[:port],... ; each NAME is a {network} in the API. See docs/E7_CLI.md.
+# With CMS_HOST and E7_NODES both set, NBI_BACKEND picks one (or python main.py --backend cms|e7-cli).
+# NBI_BACKEND=auto
+# E7_NODES=OLT-04=10.0.0.4,OLT-05=10.0.0.5
+# E7_USERNAME=provisioning
+# E7_PASSWORD=your_password_here
+# Host keys are checked against ~/.ssh/known_hosts unless this names another file ("none": lab only)
+# E7_KNOWN_HOSTS=/etc/gpon-cms/e7_known_hosts
+# NBI_TIMEOUT_SECONDS=30
+# Unverified defaults; check with python -m app.tools.e7_capture before changing anything:
+# E7_PROMPT_PATTERN=\S+[>#] ?
+# E7_PAGER_COMMAND=set session pager disabled
+# E7_SERVICE_NAMES=Data1,Data2,Data3,Data4,Data5,Data6,Data7,Data8
+
 # Topic the worker reads signup and cutover events from
 # LEGACY_EVENTS_TOPIC=legacy-gpon-events
 # Topic cutovers publish migration requests to (your XGS/SMx topic, once the schema matches)
