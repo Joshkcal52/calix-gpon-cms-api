@@ -46,7 +46,7 @@ Every route is under `/api/v2` and needs an API key, except `/` and `/health`. T
 Two rules keep the boundary sharp:
 
 1. **One owner for CMS.** Only the gateway calls CMS (the read-only check uses the backend directly, behind a guard that refuses writes).
-2. **Reads are direct, changes are queued.** A read answers within the request. A change is written to the bus and answered with `202` and a job to follow.
+2. **Reads are direct, changes are queued.** A read answers within the request. A change is written to the bus and answered with `202` and a job to follow. A request is refused up front only for what can be checked without CMS (Pydantic). Checks that need CMS, such as whether this ONT has port eth5 or a router, run in the job, so a CMS outage queues work instead of refusing it; the job fails with a clear message.
 
 ## What happens to a request
 
@@ -89,7 +89,7 @@ What is and is not known about the router side, and the four settings that confi
 
 - **Export** (`app/legacy/export.py`, `GET /networks/{network}/export`, `python -m app.legacy.export`): a network, a card or a PON port, one record per ONT laid out as SMx thinks of it (subscriber, ONT, data services), as JSON, a services CSV, a ports CSV and a snapshot. The existing serial number and registration ID are carried over because the ONT may be kept. Columns starting `fill_in_` are left blank: the new OLT and PON port, a replacement serial if the ONT is swapped, the customer's name and address. Voice is not exported, so every record has a `voice` status (the second CSV column): `not checked` when the ONT profile has voice (POTS) ports, `unknown` when that count could not be read, `none` only when the profile has none. A CSV read back without a status reads as `unknown`, and a status that contradicts `legacy_voice_ports` is refused.
 - **SMx plan** (`app/legacy/smx.py`, `POST /smx/plans`, `GET .../subscribers/{id}/smx-plan`, `python -m app.legacy.smx`): from an export or a filled-in CSV, the Create/Update Subscriber, ONT and Data Service requests that would recreate each subscriber. A mapping file (`app/legacy/smx_map.yml`, `SMX_MAP_PATH`) translates ONT profiles, bandwidth profiles, tag actions, ports, port modes and admin states. An unmapped value fails that subscriber only, with a message naming it; so does a tag action mapped to `outer` on a service with no outer VLAN. A peak-rate override other than `none` is carried only through `peak_rate_overrides` in the mapping file (SMx parameter names and values, set by hand); the shipped file has none, so such a service fails its subscriber rather than lose its rate or guess it. Each subscriber's plan carries the export's `voice` status, the plan counts those not `none` under `voice_not_checked`, and `ready` covers data services only. Nothing is sent. Parameter names follow the IDI billing SMx R24.x docs; SMx's own API format is not known here.
-- **Snapshots and compare** (`app/legacy/snapshot.py`): a snapshot is YAML built from the export. `--compare FILE` (or `POST /networks/{network}/snapshot-compare`) lists ONTs gone, ONTs new and every changed field, port and service between the snapshot and CMS now. There is no restore.
+- **Snapshots and compare** (`app/legacy/snapshot.py`): a snapshot is YAML built from the export. `--compare FILE` (or `POST /networks/{network}/snapshot-compare`, which takes the snapshot as YAML exactly as `format=snapshot` gives it, as JSON, or a JSON export) lists ONTs gone, ONTs new and every changed field, port and service between the snapshot and CMS now. There is no restore.
 - **Read-only CMS check** (`python -m app.tools.cms_check`): logs in, lists ONTs, reads one ONT with services and ports, reads profiles and VLANs, logs out. It prints what it understood, every reply field it did not recognise, the raw values of fields whose meaning is inferred, and every service ONT slot it saw. A guard on the HTTP layer refuses anything but login, logout and reads. `--dump` saves every request and reply with the password blanked.
 
 ## The legacy GPON events
@@ -126,7 +126,7 @@ Consequences: commands can run twice, so every handler is repeat-safe. Commands 
 
 ## Errors
 
-Every CMS failure reaches the client, or the failed job, in one shape:
+Every error reaches the client, or the failed job, in one shape: CMS failures, API key and queue errors, request validation and plain HTTP errors such as an unknown route or job:
 
 ```json
 {"error": {"code": "cms_unavailable", "message": "...", "retryable": true, "retry_after_seconds": 30, "operation": "get_ont"}}
@@ -134,16 +134,17 @@ Every CMS failure reaches the client, or the failed job, in one shape:
 
 | Code | HTTP | Meaning |
 |---|---|---|
+| `invalid_request` | 422 | The request is not valid (FastAPI's list of problems is under `details`), or a snapshot to compare is not one. Nothing was queued. |
 | `unauthorized` | 401 | No API key, or not a valid one. |
 | `auth_not_configured` | 503 | `API_KEYS` is not set and `MOCK_MODE` is off. |
 | `cms_timeout` | 504 | CMS did not answer in time. For a write the message says the change may have been applied. |
 | `cms_unreachable` | 502 | Could not connect to CMS. |
 | `cms_unavailable` | 503 + `Retry-After` | The circuit breaker is open. The call was not attempted. |
 | `cms_auth_failed` | 502 | CMS refused this API's own credentials. |
-| `cms_rejected` | 422 | CMS answered and said no (unknown VLAN, profile without a router). |
+| `cms_rejected` | 422 | CMS answered and said no (unknown VLAN or bandwidth profile, profile without a router). |
 | `cms_unverified` | 501 | The request needs CMS behaviour not verified and not configured (router side, setting a port's mode). Nothing was sent. |
 | `conflict` | 409 | Already exists, exists differently, wrong serial for an ONT ID, ONT still has services. |
-| `not_found` | 404 | No such network, ONT, port or service. |
+| `not_found` | 404 | No such network, ONT, port, service, subscriber, job or route. |
 | `cms_not_configured` | 503 | `MOCK_MODE` is off and `CMS_HOST` is not set. |
 | `untranslatable` | job only | A cutover found a profile or VLAN with no entry in the profile map. |
 | `queue_unavailable` | 503 | The bus did not accept the command. Nothing was queued. |
@@ -152,7 +153,7 @@ Every CMS failure reaches the client, or the failed job, in one shape:
 
 | Mode | How | Use |
 |---|---|---|
-| Single process | `MOCK_MODE=true python main.py` | Development. In-process queue, embedded worker, simulated CMS. No API key needed. Jobs are lost on restart. |
+| Single process | `MOCK_MODE=true python main.py` | Development. In-process queue, embedded worker, simulated CMS. No API key needed unless `API_KEYS` is set (then it is enforced, as it always is with `MOCK_MODE` off). Jobs are lost on restart. |
 | Demo topology | `deploy/demo/` (Docker Compose, or four local processes) | Kafka, API, worker, mock CMS NBI server and a stand-in XGS listener. |
 | Production shape | API: `uvicorn main:app`. Workers: `WORKER_LANES=provisioning` and `WORKER_LANES=legacy python -m app.worker`. `CMS_HOST` and `API_KEYS` set. | See `deploy/k8s/gpon-cms.yaml`. |
 

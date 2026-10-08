@@ -157,10 +157,13 @@ def _items(saved: List[Dict[str, Any]], now: List[Dict[str, Any]], key, fields: 
 
 
 def check_snapshot(saved: Any) -> None:
-    if not isinstance(saved, dict) or saved.get("format") not in (1, 2):
-        raise ValueError(f"Unknown snapshot format {saved.get('format') if isinstance(saved, dict) else None!r}")
+    if not isinstance(saved, dict) or "format" not in saved:
+        raise ValueError("a snapshot has a format, a network and a list of onts, as the export's "
+                         "format=snapshot gives it")
+    if saved["format"] not in (1, 2):
+        raise ValueError(f"unknown snapshot format {saved['format']!r} (this code reads formats 1 and 2)")
     if not saved.get("network") or not isinstance(saved.get("onts"), list):
-        raise ValueError("A snapshot needs a network and a list of onts")
+        raise ValueError("a snapshot needs a network and a list of onts")
 
 
 def compare(saved: Dict[str, Any], current: Dict[str, Any]) -> Comparison:

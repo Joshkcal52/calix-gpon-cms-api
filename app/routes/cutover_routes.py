@@ -6,13 +6,15 @@ would recreate each subscriber on XGS. Nothing here changes CMS and nothing
 is sent to SMx.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+import yaml
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.dependencies import get_gateway
 from app.legacy.export import (
@@ -20,7 +22,7 @@ from app.legacy.export import (
     to_csv
 )
 from app.legacy.smx import SmxMap, SmxPlan, plan_export
-from app.legacy.snapshot import Comparison, compare_with_cms, snapshot_from_export, to_yaml
+from app.legacy.snapshot import Comparison, check_snapshot, compare_with_cms, snapshot_from_export, to_yaml
 from app.models.provisioning_model import NETWORK_PATTERN
 from app.nbi.errors import NbiConflictError, NbiNotFoundError
 from app.nbi.gateway import NbiGateway
@@ -75,16 +77,54 @@ async def export(network: str = NetworkPath,
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
-@router.post("/networks/{network}/snapshot-compare", response_model=Comparison)
-async def snapshot_compare(snapshot: Dict[str, Any], network: str = NetworkPath,
+YAML_TYPES = ("application/yaml", "application/x-yaml", "text/yaml", "text/x-yaml", "text/plain")
+SNAPSHOT_BODY = {"requestBody": {"required": True, "content": {
+    "application/json": {"schema": {"type": "object", "description": "A snapshot, or a JSON export (format=json)"}},
+    "application/yaml": {"schema": {"type": "string", "description": "A snapshot as YAML (format=snapshot)"}},
+}}}
+
+
+def _read_snapshot(body: bytes, content_type: str) -> Dict[str, Any]:
+    """
+    A saved snapshot from a request body: YAML as the export's format=snapshot
+    gives it, the same as JSON, or a JSON export (format=json), which is turned
+    into a snapshot here.
+    """
+    try:
+        if content_type.split(";")[0].strip().lower() in YAML_TYPES:
+            document = yaml.safe_load(body.decode("utf-8-sig"))
+        else:
+            document = json.loads(body)
+    except (UnicodeDecodeError, ValueError, yaml.YAMLError) as e:
+        raise HTTPException(status_code=422, detail=f"The body is not readable JSON or YAML: {e}") from None
+    if isinstance(document, dict) and "records" in document and "onts" not in document:
+        try:
+            return snapshot_from_export(CutoverExport.model_validate(document))
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=f"Not a usable export: {e.error_count()} problem(s), "
+                                                        f"first: {e.errors()[0]['msg']}") from None
+    return document
+
+
+@router.post("/networks/{network}/snapshot-compare", response_model=Comparison, openapi_extra=SNAPSHOT_BODY)
+async def snapshot_compare(request: Request, network: str = NetworkPath,
                            gateway: NbiGateway = Depends(get_gateway)) -> Comparison:
     """
-    Read-only: what differs between a saved snapshot (as JSON) and what CMS
-    holds now, over the snapshot's own scope (network, card or PON port).
-    Nothing is changed.
+    Read-only: what differs between a saved snapshot and what CMS holds now,
+    over the snapshot's own scope (network, card or PON port). Nothing is
+    changed.
+
+    Send the snapshot as YAML (Content-Type application/yaml, exactly as the
+    export's format=snapshot gives it) or as JSON. A JSON export (format=json)
+    is accepted too and compared as a snapshot.
     """
-    if snapshot.get("network") != network:
-        raise HTTPException(status_code=422, detail=f"This snapshot is of {snapshot.get('network')!r}, not {network}")
+    snapshot = _read_snapshot(await request.body(), request.headers.get("content-type", "application/json"))
+    try:
+        check_snapshot(snapshot)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"Not a usable snapshot: {e}") from None
+    if snapshot["network"] != network:
+        raise HTTPException(status_code=422, detail=f"This snapshot is of network {snapshot['network']}, not {network}")
     try:
         return await compare_with_cms(gateway, snapshot)
     except (KeyError, ValueError, TypeError) as e:
