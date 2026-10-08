@@ -118,6 +118,17 @@ Before the first change on a real CMS, know that:
 - **CMS expects database IDs, not names**, for profiles and tag actions, and network names in the form `NTWK-...`.
 - **The mapping files hold demo values.** Replace `app/legacy/profile_map.yml` and `app/legacy/smx_map.yml` with your own.
 
+## Without the CMS NBI: the E7 command line
+
+If your CMS has no NBI licence, the API can provision through each E7 EXA's own CLI over SSH instead. Set `E7_NODES` (each name becomes a `{network}`) in place of `CMS_HOST`. Everything above the backend works the same. The commands follow Calix's public E7 EXA CLI reference, but Calix publishes no sample output, so the parsers are unverified. Run the read-only capture first:
+
+```bash
+export E7_NODES=OLT-04=10.0.0.4 E7_USERNAME=... E7_PASSWORD=... NBI_TIMEOUT_SECONDS=30
+python -m app.tools.e7_capture --network OLT-04 --ont-id <id> --out ./e7-captures   # show commands only
+```
+
+How each operation maps to a command, and what is still unknown, is in [docs/E7_CLI.md](docs/E7_CLI.md).
+
 ## Configuration
 
 Settings come from environment variables or a `.env` file. `env_example.txt` has the common ones and `config.py` has every setting. The main ones:
@@ -167,11 +178,11 @@ Run on Python 3.10 and 3.12. The tests run every CMS operation through the CMS c
 app/
   routes/       REST routes
   controller/   provisioning workflows and job tracking
-  nbi/          CMS gateway, CMS client and backend, simulated CMS and mock CMS server
+  nbi/          CMS gateway, CMS client and backend, E7 CLI backend, simulated CMS, mock CMS server and mock E7
   legacy/       signup and cutover events, export, SMx plan, snapshots
   messaging/    the queue: in-process or Kafka
   worker/       background worker (python -m app.worker)
-  tools/        read-only CMS check
+  tools/        read-only CMS check and E7 capture
   models/       request and response models
 deploy/         Dockerfile, demo, Kubernetes manifests
 docs/           architecture

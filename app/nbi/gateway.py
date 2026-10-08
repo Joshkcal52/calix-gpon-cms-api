@@ -205,7 +205,7 @@ class NotConfiguredBackend:
     def _refuse(self) -> NbiNotConfiguredError:
         return NbiNotConfiguredError(
             "No CMS connection is configured. Set CMS_HOST (with CMS_USERNAME and CMS_PASSWORD) "
-            "to reach a CMS, or MOCK_MODE=true to use the simulated one.")
+            "to reach a CMS, E7_NODES to use each E7's command line, or MOCK_MODE=true to use the simulated one.")
 
     async def list_discovered_onts(self, network: str) -> List[DiscoveredOnt]:
         raise self._refuse()
@@ -262,6 +262,15 @@ def build_gateway(settings: Any) -> NbiGateway:
         from app.nbi.mock_cms import MockCmsBackend
         backend: NbiBackend = MockCmsBackend()
         logger.warning("MOCK_MODE is on: CMS calls go to a simulated CMS, not a real one")
+    elif settings.cms_host and getattr(settings, "e7_nodes", None):
+        raise ValueError("Set CMS_HOST (provision through CMS) or E7_NODES (through each E7's CLI), not both")
+    elif getattr(settings, "e7_nodes", None):
+        from app.nbi.e7_backend import backend_from_settings
+        backend = backend_from_settings(settings)
+        logger.warning(f"E7 CLI backend: provisioning over SSH on {', '.join(backend.nodes)}. NOT VERIFIED against "
+                       f"a real E7; see app/nbi/e7_backend.py")
+        if (settings.e7_known_hosts or "").lower() == "none":
+            logger.warning("E7_KNOWN_HOSTS is none: the E7s' SSH host keys are not checked")
     elif settings.cms_host:
         from app.nbi.cms_backend import CmsBackend
         from app.nbi.router_side import router_side_addressing

@@ -174,6 +174,10 @@ Every error reaches the client, or the failed job, in one shape: CMS failures, A
 
 Two requests always differed from the library's, on purpose: its Ethernet port update raised `KeyError` and its service update silently dropped tag-action and bandwidth-profile changes, so this project built those two itself, in the shape the library meant to send. Where the new client goes beyond the library, it is untested against a real CMS: paging (the library's `show-ont` paging could not have handled a page holding more than one ONT, and the mock never paged), HTTPS (the library had none), and escaping of the login (the library did not escape it).
 
+## The E7 CLI backend
+
+For a CMS without the NBI licence, `app/nbi/e7_backend.py` provisions through each E7's command line over SSH (`app/nbi/e7_session.py`: one session per E7, one command at a time, dropped after a timeout). It implements the same `NbiBackend` protocol, so the gateway and everything above it are unchanged. Command output is read by the lenient parsers in `app/nbi/e7_parse.py`, which are unverified because Calix publishes no sample output. Details, settings and the checklist are in [E7_CLI.md](E7_CLI.md).
+
 ## What is verified, and what is not
 
 Verified by the test suite (`requirements-test.txt`, run on Python 3.10 and 3.12) and by running it:

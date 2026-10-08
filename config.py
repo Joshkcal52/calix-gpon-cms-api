@@ -53,7 +53,27 @@ class Settings(BaseSettings):
     cms_rg_port_type: Optional[str] = None
     cms_rg_port_id_element: Optional[str] = None
     cms_rg_port_mode_element: Optional[str] = None  # read-only: an Ethernet port's bridge/router mode
-    nbi_timeout_seconds: float = 10.0  # per CMS call
+
+    # --- E7 command line (for a CMS without the NBI licence) ---
+    # Provision through each E7 EXA node's own CLI over SSH instead of CMS. See app/nbi/e7_backend.py.
+    # NAME=host[:port],... Each NAME is a network in the API's URLs. Not used together with CMS_HOST.
+    e7_nodes: Optional[str] = None
+    e7_username: str = ""
+    e7_password: Optional[str] = None
+    # SSH host keys are checked against ~/.ssh/known_hosts unless this names another file.
+    # "none" turns the check off (a test lab only: anyone on the path could pose as the E7).
+    e7_known_hosts: Optional[str] = None
+    # UNVERIFIED against a real E7: Calix documents none of these four. Check them with
+    # python -m app.tools.e7_capture before provisioning.
+    e7_prompt_pattern: str = r"\S+[>#] ?"  # the whole last line of output when the E7 is waiting
+    e7_pager_command: str = "set session pager disabled"
+    e7_session_commands: str = "set session alarm-notif disabled,set session event-notif disabled,set session tca-notif disabled"
+    e7_error_pattern: str = (r"(?i)(\berror\b|invalid input|\binvalid\b|failed|cannot|can't|not allowed|denied|"
+                             r"does not exist|doesn't exist|not found|no such|already exists|in use|unknown)")
+    # Service names, in service_index order: show eth-svc-name on the E7 lists the real ones
+    e7_service_names: str = "Data1,Data2,Data3,Data4,Data5,Data6,Data7,Data8"
+
+    nbi_timeout_seconds: float = 10.0  # per CMS (or E7) call; 30 or more for E7, whose calls run several commands
     nbi_max_retries: int = 2  # extra attempts for reads; writes are retried by the worker
     nbi_max_concurrency: int = 8  # CMS calls in flight per process
     nbi_breaker_failure_threshold: int = 5  # consecutive failures that pause CMS calls
