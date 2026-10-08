@@ -219,6 +219,12 @@ def test_rate_changes_over_soap_are_repeat_safe_and_exported(nbi_server):
         async def step(self, number, total, message):
             pass
 
+        async def record_ownership(self, message, /, **data):
+            await self.emit("ownership", message, **data)
+
+        async def ownership_records(self):
+            return []
+
     async def scenario():
         gateway = NbiGateway(CmsBackend("127.0.0.1", port, "nbi-demo", "demo-password", timeout=3.0,
                                         router=MOCK_RG_ADDRESSING), timeout=5)

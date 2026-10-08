@@ -22,7 +22,7 @@ acknowledgement), so handlers must be safe to run again.
 import asyncio
 import json
 import logging
-from collections import deque
+from collections import OrderedDict, deque
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Deque, Dict, List, Optional, Protocol, Sequence, Tuple
 
@@ -95,6 +95,12 @@ class MessageBus(Protocol):
     def updates(self) -> AsyncIterator[JobUpdate]:
         """Every update, including ones published before this call where the bus keeps history"""
 
+    async def job_history(self, job_id: str, since: datetime, timeout: float) -> List[JobUpdate]:
+        """
+        One job's updates published from `since` up to now, in order. Raises BusUnavailableError if
+        they cannot all be read within `timeout` seconds.
+        """
+
     def consume_commands(self, lanes: Sequence[str]) -> CommandConsumer: ...
 
 
@@ -102,6 +108,7 @@ class InMemoryBus:
     """Queues inside this process. Nothing survives a restart."""
 
     name = "in-memory"
+    max_history_jobs = 10_000  # job_history() remembers this many jobs' updates, the oldest dropped first
 
     def __init__(self) -> None:
         self._queues: Dict[str, Deque[Delivery]] = {}
@@ -109,6 +116,7 @@ class InMemoryBus:
         self._subscribers: List[asyncio.Queue] = []
         self.dead_letters: List[Tuple[Command, Dict[str, Any]]] = []
         self.events: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}  # topic -> [(key, value)]
+        self._history: "OrderedDict[str, List[JobUpdate]]" = OrderedDict()  # job id -> its updates
 
     async def start(self) -> None:
         return None
@@ -125,8 +133,15 @@ class InMemoryBus:
 
     async def publish_update(self, update: JobUpdate) -> None:
         copy = JobUpdate.model_validate_json(update.model_dump_json())
+        self._history.setdefault(copy.job_id, []).append(copy)
+        self._history.move_to_end(copy.job_id)
+        while len(self._history) > self.max_history_jobs:
+            self._history.popitem(last=False)
         for queue in self._subscribers:
             queue.put_nowait(copy)
+
+    async def job_history(self, job_id: str, since: datetime, timeout: float) -> List[JobUpdate]:
+        return [u for u in self._history.get(job_id, []) if u.timestamp >= since]
 
     async def publish_event(self, topic: str, key: str, value: Dict[str, Any]) -> None:
         self.events.setdefault(topic, []).append((key, json.loads(json.dumps(value))))

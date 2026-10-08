@@ -7,12 +7,13 @@ within the request, and the multi-step activation that a worker runs.
 import asyncio
 import logging
 import time
-from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Any, Awaitable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from app.models.provisioning_model import (
     ActivationRequest, Attachment, EthernetService, OntSpec, OperState, PortChange, PortState, ProvisionedService,
-    ServiceChange, StatusCheckItem, StatusCheckResult, port_name
+    ServiceChange, StatusCheckItem, StatusCheckResult, port_name, service_identity
 )
+from app.messaging.bus import BusUnavailableError
 from app.nbi.errors import NbiConflictError, NbiError, NbiNotFoundError, NbiRejectedError
 from app.nbi.gateway import NbiGateway
 from app.worker.runner import JobContext
@@ -80,11 +81,17 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     command that is delivered twice (worker crash, CMS timeout) picks up where
     the first run stopped instead of failing on "already exists".
 
-    If CMS rejects a port setting or a service, the ONT created by this run is deleted again
+    If CMS rejects a port setting or a service, the ONT created by this job is deleted again
     (unless rollback_on_failure is false), so a failed activation leaves
-    nothing half-provisioned. An ONT this run did not create is never deleted,
-    and neither is one that has picked up a service this run did not add (see
+    nothing half-provisioned. An ONT this job did not create is never deleted,
+    and neither is one that has picked up a service this job did not add (see
     _roll_back). A provisioned ONT that is slow to come online is left in place.
+
+    What this job created is recorded in its history (context.record_ownership)
+    as it is created, so an attempt after one that created the ONT and then
+    failed for a passing reason can still roll it back. A missing record means
+    "not this job's", so a write whose record the bus will not take is undone
+    before the attempt fails (and is retried).
     """
     total_steps = 5
     serial = request.serial_number
@@ -93,7 +100,8 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     check_bandwidth_profiles((s.bandwidth_profile for s in request.services), bandwidth_profiles)
     await _check_router_services(context, gateway, network, request)
     ont = await gateway.find_ont_by_serial(network, serial)
-    created_here = False
+    created_here = False  # by this job, in this attempt or an earlier one
+    added: Set[Tuple[Any, ...]] = set()  # identities of the services this job bound, the only ones a rollback deletes
 
     if ont is not None:
         if request.ont_id is not None and ont.ont_id != request.ont_id:
@@ -104,7 +112,13 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
             raise NbiConflictError(
                 f"Serial number {serial} is already provisioned as ONT {ont.ont_id} with profile "
                 f"'{ont.profile}', not '{request.profile}'.")
-        await context.step(2, total_steps, f"ONT {serial} already exists as ONT {ont.ont_id}; not creating it again")
+        owned = await _earlier_attempts_work(context, network, serial, ont.ont_id) if request.rollback_on_failure else None
+        if owned is not None:
+            created_here, added = True, owned
+            await context.step(2, total_steps, f"ONT {serial} was created as ONT {ont.ont_id} by an earlier attempt "
+                                               f"of this job; carrying on from there")
+        else:
+            await context.step(2, total_steps, f"ONT {serial} already exists as ONT {ont.ont_id}; not creating it again")
     else:
         discovered = await gateway.list_discovered_onts(network)
         match = next((d for d in discovered if d.serial_number == serial), None)
@@ -123,7 +137,13 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
         spec = OntSpec(**request.model_dump(include=set(OntSpec.model_fields)))
         ont = await gateway.create_ont(network, spec)
         created_here = True
-        await context.emit("log", f"Created ONT {ont.ont_id}", ont_id=ont.ont_id)
+        try:
+            await context.record_ownership(f"Created ONT {ont.ont_id}", network=network, ont_id=ont.ont_id,
+                                           serial_number=serial)
+        except BusUnavailableError:
+            # Unrecorded, a later attempt would take it for someone else's and never roll it back
+            await _undo(f"ONT {ont.ont_id}", gateway.delete_ont(network, ont.ont_id, force=False))
+            raise
 
     ont_id = ont.ont_id
     # A service is already there if one with the same identity is: side, port and VLAN, or for a
@@ -133,7 +153,6 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     # Already bound, but not as the request asks: changed in place rather than skipped
     changed = [(bound[s.identity()], d) for s in request.services
                if s.identity() in bound and (d := service_differences(bound[s.identity()], s))]
-    added = set()  # identities of the services this run bound, the only ones a rollback deletes
 
     try:
         await context.step(3, total_steps, f"Configuring {len(request.ports)} Ethernet port(s) on ONT {ont_id}")
@@ -157,13 +176,31 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
             await context.emit("log", f"Changed {where}: {_describe(differences)}", port=where, **differences)
         # One at a time: parallel edits to the same ONT are not worth the risk
         for service in missing:
-            await gateway.add_ethernet_service(network, ont_id, service)
-            added.add(service.identity())
             side = "router port rg" if service.attach_to == "router" else "ONT port "
             what = f"VLAN {service.vlan}" if service.vlan is not None else f"tag action {service.tag_action} (no VLAN)"
-            await context.emit("log", f"Bound {what} to {side}{service.ont_port}",
-                               vlan=service.vlan, tag_action=service.tag_action, ont_port=service.ont_port,
-                               attach_to=service.attach_to)
+            try:
+                await gateway.add_ethernet_service(network, ont_id, service)
+            except NbiConflictError:
+                # "Already exists": another run (this job's own, delivered twice at once, or another
+                # job's) bound it after step 1 read the ONT. Not this run's, so a rollback leaves the ONT.
+                if not any(s.identity() == service.identity() for s in (await gateway.get_ont(network, ont_id)).services):
+                    raise
+                await context.emit("log", f"{what} on {side}{service.ont_port} was bound meanwhile by another run",
+                                   vlan=service.vlan, ont_port=service.ont_port, attach_to=service.attach_to)
+                continue
+            added.add(service.identity())
+            fields = dict(vlan=service.vlan, tag_action=service.tag_action, ont_port=service.ont_port,
+                          attach_to=service.attach_to)
+            if created_here:
+                try:
+                    await context.record_ownership(f"Bound {what} to {side}{service.ont_port}", network=network,
+                                                   ont_id=ont_id, service=fields)
+                except BusUnavailableError:
+                    await _undo(f"{what} on {side}{service.ont_port}",
+                                _delete_bound(gateway, network, ont_id, service.identity()))
+                    raise
+            else:
+                await context.emit("log", f"Bound {what} to {side}{service.ont_port}", **fields)
     except NbiError as e:
         # Roll back only when CMS said no. If CMS is merely unreachable the
         # command is retried and carries on from here.
@@ -251,6 +288,33 @@ async def _check_router_services(context: JobContext, gateway: NbiGateway, netwo
             raise NbiRejectedError(
                 f"ONT profile '{request.profile}' has {profile.rg_ports} router port(s); there is no "
                 f"rg{service.ont_port}. Nothing was changed.")
+
+
+async def _undo(what: str, deletion: Awaitable[None]) -> None:
+    """Best effort: if the delete fails too, the record is still missing and a person has to look"""
+    try:
+        await deletion
+    except NbiError as e:
+        logger.error(f"Could not record or undo {what} ({e.message}); it is on CMS and not recorded as this job's")
+
+
+async def _delete_bound(gateway: NbiGateway, network: str, ont_id: int, identity: Tuple[Any, ...]) -> None:
+    service = next(s for s in (await gateway.get_ont(network, ont_id)).services if s.identity() == identity)
+    await gateway.delete_service(network, ont_id, service.attachment, service.ont_port, service.service_index)
+
+
+async def _earlier_attempts_work(context: JobContext, network: str, serial: str,
+                                 ont_id: int) -> Optional[Set[Tuple[Any, ...]]]:
+    """
+    If an earlier attempt of this job recorded creating this ONT, the identities of the services it
+    recorded binding to it; otherwise None (not this job's ONT). Only asked when the ONT exists.
+    """
+    records = [r for r in await context.ownership_records()
+               if r.get("network") == network and r.get("ont_id") == ont_id]
+    if not any(r.get("serial_number") == serial and "service" not in r for r in records):
+        return None
+    return {service_identity(Attachment(s["attach_to"]), s["ont_port"], s.get("vlan"), s.get("tag_action"))
+            for r in records if (s := r.get("service"))}
 
 
 async def _roll_back(context: JobContext, gateway: NbiGateway, network: str, ont_id: int,

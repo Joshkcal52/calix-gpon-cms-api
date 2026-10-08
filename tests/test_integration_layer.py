@@ -463,6 +463,12 @@ class NullContext:
     async def step(self, number, total, message):
         self.messages.append(message)
 
+    async def record_ownership(self, message, /, **data):
+        await self.emit("ownership", message, **data)
+
+    async def ownership_records(self):
+        return []
+
 
 def activation(**overrides):
     fields = dict(serial_number=NEW_SERIAL, profile="844G-1",
@@ -703,3 +709,19 @@ def test_activation_waits_out_a_cms_outage_instead_of_failing(api, monkeypatch):
 def test_unknown_job_is_404(api):
     assert api.get("/api/v2/jobs/nope").status_code == 404
     assert api.get("/api/v2/jobs/nope/events").status_code == 404
+
+
+def test_the_in_memory_bus_keeps_each_jobs_history_like_kafka():
+    # So ownership records work in the default single-process mode too
+    async def scenario():
+        bus = InMemoryBus()
+        bus.max_history_jobs = 2
+        before = datetime.now(timezone.utc)
+        for job in ("j1", "j2", "j1", "j3"):
+            await bus.publish_update(JobUpdate(job_id=job, kind="k", summary="s", type="ownership", message=job))
+        assert [u.message for u in await bus.job_history("j3", before, timeout=1)] == ["j3"]
+        assert [u.message for u in await bus.job_history("j1", before, timeout=1)] == ["j1", "j1"]
+        assert await bus.job_history("j2", before, timeout=1) == []  # the oldest job, dropped
+        assert await bus.job_history("j1", datetime.now(timezone.utc) + timedelta(minutes=1), timeout=1) == []
+
+    asyncio.run(scenario())

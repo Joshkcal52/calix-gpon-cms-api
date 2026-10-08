@@ -31,16 +31,18 @@ Kafka wire protocol against librdkafka's mock cluster
 (tests/test_kafka_protocol.py). Not yet run against an Apache Kafka broker.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Callable, Dict, Optional, Sequence, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence, Tuple
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
 from aiokafka.errors import CommitFailedError, KafkaError
+from aiokafka.partitioner import DefaultPartitioner
 
 from app.messaging.bus import BusUnavailableError, Delivery
-from app.models.job_model import Command, JobUpdate
+from app.models.job_model import OWNERSHIP, Command, JobUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -97,9 +99,50 @@ class KafkaBus:
         await self._send(topic, json.dumps(value).encode(), key=key, wait=True)
 
     async def publish_update(self, update: JobUpdate) -> None:
-        # Status changes wait for the broker; chatter in between does not
+        # Status changes and ownership records wait for the broker; chatter in between does not
         await self._send(self.updates_topic, update.model_dump_json().encode(),
-                         key=update.job_id, wait=update.status is not None)
+                         key=update.job_id, wait=update.status is not None or update.type == OWNERSHIP)
+
+    async def job_history(self, job_id: str, since: datetime, timeout: float) -> List[JobUpdate]:
+        """
+        Updates are keyed by job id, so one job's are all in one partition. Read that partition
+        from the first offset at or after `since` to its end as it is when the read starts.
+        """
+        try:
+            return await asyncio.wait_for(self._read_job_history(job_id, since), timeout=timeout)
+        except (KafkaError, OSError, asyncio.TimeoutError) as e:
+            raise BusUnavailableError(f"Could not read the history of job {job_id} from {self.updates_topic} "
+                                      f"within {timeout:g} seconds: {e or type(e).__name__}") from e
+
+    async def _read_job_history(self, job_id: str, since: datetime) -> List[JobUpdate]:
+        if self._producer is None:
+            raise BusUnavailableError("The Kafka producer is not running.")
+        key = job_id.encode()
+        # The partition the producer chose for this key: its partitioner over the topic's partitions
+        ordered = sorted(await self._producer.partitions_for(self.updates_topic))
+        tp = TopicPartition(self.updates_topic, DefaultPartitioner()(key, ordered, ordered))
+        consumer = AIOKafkaConsumer(bootstrap_servers=self._servers, group_id=None, enable_auto_commit=False)
+        await consumer.start()
+        try:
+            consumer.assign([tp])
+            end = (await consumer.end_offsets([tp]))[tp]
+            found = (await consumer.offsets_for_times({tp: int(since.timestamp() * 1000)}))[tp]
+            if found is None or found.offset >= end:
+                return []
+            consumer.seek(tp, found.offset)
+            history: List[JobUpdate] = []
+            while await consumer.position(tp) < end:
+                for record in (await consumer.getmany(tp, timeout_ms=1000)).get(tp, []):
+                    if record.offset >= end:
+                        break
+                    if record.key == key:
+                        try:
+                            history.append(JobUpdate.model_validate_json(record.value))
+                        except ValueError:
+                            logger.warning(f"Skipping unreadable job update at offset {record.offset}")
+            return history
+        finally:
+            await consumer.stop()
 
     async def updates(self) -> AsyncIterator[JobUpdate]:
         # No consumer group: every API process reads every partition, from the

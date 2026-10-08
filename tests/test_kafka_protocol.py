@@ -14,6 +14,7 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -27,8 +28,9 @@ from app.controller.job_controller import JobStore  # noqa: E402
 from app.legacy import events as legacy_events  # noqa: E402
 from app.legacy.handlers import build_legacy_handlers  # noqa: E402
 from app.legacy.models import XgsMigrationRequest  # noqa: E402
+from app.messaging.bus import BusUnavailableError  # noqa: E402
 from app.messaging.kafka_bus import KafkaBus  # noqa: E402
-from app.models.job_model import Command, JobStatus  # noqa: E402
+from app.models.job_model import OWNERSHIP, Command, JobStatus, JobUpdate  # noqa: E402
 from app.nbi.errors import NbiRejectedError, NbiTimeoutError  # noqa: E402
 from app.nbi.gateway import NbiGateway  # noqa: E402
 from app.nbi.mock_cms import MOCK_NETWORK, MockCmsBackend  # noqa: E402
@@ -335,5 +337,79 @@ def test_legacy_topic_takes_plain_events_and_a_cutover_reaches_the_xgs_topic(kaf
             parked = await read_topic(kafka, h.bus.dlq_topic, 1)
             assert parked[0].value == b"this is not an event"
             assert dict(parked[0].headers)["error-code"] == b"invalid_command"
+
+    run(scenario())
+
+
+@pytest.fixture
+def offsets_for_times(monkeypatch, kafka):
+    """
+    librdkafka's mock cluster answers a ListOffsets by timestamp with nothing (aiokafka returns None),
+    where a real broker gives the first offset at or after that time. Stand in for that one broker
+    call by scanning the partition's timestamps; the rest of the read stays on the wire.
+    """
+    from aiokafka.structs import OffsetAndTimestamp
+
+    async def by_scanning(self, timestamps):
+        answer = {}
+        for tp, wanted in timestamps.items():
+            scan = AIOKafkaConsumer(bootstrap_servers=kafka.kafka_bootstrap_servers, group_id=None)
+            await scan.start()
+            try:
+                scan.assign([tp])
+                end = (await scan.end_offsets([tp]))[tp]
+                scan.seek(tp, 0)  # the mock answers "earliest" with the end too
+                answer[tp] = None
+                while answer[tp] is None and await scan.position(tp) < end:
+                    for record in (await scan.getmany(tp, timeout_ms=500)).get(tp, []):
+                        if record.timestamp >= wanted:
+                            answer[tp] = OffsetAndTimestamp(record.offset, record.timestamp)
+                            break
+            finally:
+                await scan.stop()
+        return answer
+
+    monkeypatch.setattr(AIOKafkaConsumer, "offsets_for_times", by_scanning)
+
+
+def test_a_jobs_history_is_read_from_its_own_partition_and_no_further(kafka, offsets_for_times):
+    # Updates are keyed by job id across 4 partitions. One job's history is its updates from the
+    # time given, in order, and none of another job's
+    async def scenario():
+        bus = KafkaBus(kafka)
+        await bus.start()
+        try:
+            def update(job_id, n, type="log"):
+                return JobUpdate(job_id=job_id, kind="activation", summary="s", type=type, message=f"{job_id} {n}")
+
+            before = datetime.now(timezone.utc)
+            for n in range(5):
+                for job in ("job-a", "job-b", "job-c", "job-d"):
+                    await bus.publish_update(update(job, n, type=OWNERSHIP if n == 2 else "status"))
+            history = await bus.job_history("job-c", before - timedelta(minutes=1), timeout=20)
+            assert [u.message for u in history] == [f"job-c {n}" for n in range(5)]
+            assert [u.type for u in history][2] == OWNERSHIP
+            assert await bus.job_history("job-c", datetime.now(timezone.utc) + timedelta(minutes=5), timeout=20) == []
+            assert await bus.job_history("job-never", before, timeout=20) == []
+        finally:
+            await bus.stop()
+
+    run(scenario())
+
+
+def test_a_history_kafka_cannot_give_is_a_bus_failure_within_the_timeout(kafka):
+    # The attempt then fails as retryable: nothing has been changed in CMS at that point
+    async def scenario():
+        bus = KafkaBus(kafka)
+        await bus.start()
+        try:
+            await bus.publish_update(JobUpdate(job_id="job-a", kind="k", summary="s", type=OWNERSHIP, message="m"))
+            bus._servers = "127.0.0.1:1"  # the reader cannot reach a broker
+            started = time.monotonic()
+            with pytest.raises(BusUnavailableError, match="history of job job-a"):
+                await bus.job_history("job-a", datetime.now(timezone.utc), timeout=3)
+            assert time.monotonic() - started < 10
+        finally:
+            await bus.stop()
 
     run(scenario())

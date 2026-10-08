@@ -31,6 +31,12 @@ class Context:
     async def step(self, number, total, message):
         pass
 
+    async def record_ownership(self, message, /, **data):
+        await self.emit("ownership", message, **data)
+
+    async def ownership_records(self):
+        return []
+
 
 async def with_e7(e7, scenario):
     """Run scenario(backend) against e7 over SSH, in this event loop"""

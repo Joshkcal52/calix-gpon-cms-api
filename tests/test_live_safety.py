@@ -25,13 +25,13 @@ import pytest
 from app.controller.lifecycle_controller import apply_ont_change
 from app.controller.provisioning_controller import activate_ont, service_differences
 from app.messaging.bus import BusUnavailableError
-from app.models.job_model import Command
+from app.models.job_model import Command, JobStatus
 from app.models.lifecycle_model import DeleteOnt
 from app.models.provisioning_model import (
     ActivationRequest, Attachment, EthernetService, OntProfile, OntSpec, ProvisionedService
 )
 from app.nbi.breaker import CircuitBreaker
-from app.nbi.errors import NbiConflictError, NbiRejectedError
+from app.nbi.errors import NbiConflictError, NbiRejectedError, NbiTimeoutError
 from app.nbi.gateway import NbiGateway
 from app.nbi.mock_cms import MOCK_NETWORK, MockCmsBackend
 from app.worker.runner import JobContext
@@ -51,6 +51,12 @@ class Recorder:
 
     async def step(self, number, total, message):
         self.messages.append(message)
+
+    async def record_ownership(self, message, /, **data):
+        await self.emit("ownership", message, **data)
+
+    async def ownership_records(self):
+        return []
 
 
 def make_gateway():
@@ -157,25 +163,29 @@ def test_rollback_removes_the_ont_this_run_created_without_force():
 
 def test_rollback_leaves_an_ont_another_run_is_provisioning():
     # The same command running twice at once: while this run binds its services, the other run
-    # binds one this run then finds already there. CMS refuses this run's add, and the rollback
-    # must not delete the ONT the other run is finishing.
+    # binds the second one first. This run's add gets "already exists", re-reads the ONT, finds
+    # it bound and carries on. CMS then refuses the third, and the rollback must not delete the
+    # ONT the other run is finishing.
     async def scenario():
         gateway, backend = make_gateway()
         real_add = backend.add_ethernet_service
 
         async def other_run_gets_there_first(network, ont_id, service):
             if service.ont_port == 2:
-                await real_add(network, ont_id, service.model_copy(update={"bandwidth_profile": "RES-1G"}))
+                await real_add(network, ont_id, service)
             await real_add(network, ont_id, service)
 
         backend.add_ethernet_service = other_run_gets_there_first
         recorder = Recorder()
-        request = rejected_request()
-        request.services[1].bandwidth_profile = "RES-1G"
-        with pytest.raises(NbiConflictError, match="already has a service"):
+        request = ActivationRequest(serial_number=NEW_SERIAL, profile="844G-1", wait_for_online=False, services=[
+            EthernetService(vlan=100, bandwidth_profile="RES-1G", tag_action="1"),
+            EthernetService(vlan=100, bandwidth_profile="RES-1G", tag_action="1", ont_port=2),
+            EthernetService(vlan=100, bandwidth_profile="NOPE-BW", tag_action="1", ont_port=3)])
+        with pytest.raises(NbiRejectedError, match="NOPE-BW"):
             await activate_ont(recorder, gateway, NET, request, verify_timeout=0, poll_seconds=0)
         ont = next(o.state for o in backend._onts.values() if o.state.serial_number == NEW_SERIAL)
         assert sorted(s.ont_port for s in ont.services) == [1, 2]
+        assert any("bound meanwhile by another run" in m for m in recorder.messages)
         assert any(m.startswith("Not rolled back") for m in recorder.messages)
 
     asyncio.run(scenario())
@@ -198,19 +208,97 @@ def test_a_retry_that_finds_the_ont_says_it_may_be_left_partially_provisioned():
     asyncio.run(scenario())
 
 
-def test_rollback_runs_while_the_bus_drops_progress_events():
-    # Kafka refuses the progress events: the rollback still deletes the ONT
-    class DownBus:
-        async def publish_update(self, update):
-            raise BusUnavailableError("Kafka is down")
+class FlakyBus:
+    """Takes nothing (down), or only the updates the bus waits for (ownership records), or everything"""
 
+    def __init__(self, takes=()):
+        self.takes, self.published = takes, []
+
+    async def publish_update(self, update):
+        if update.type not in self.takes:
+            raise BusUnavailableError("Kafka is down")
+        self.published.append(update)
+
+    async def job_history(self, job_id, since, timeout):
+        return list(self.published)
+
+
+def flaky_context(bus, attempt=1):
+    return JobContext(bus, Command(id="job-1", action="activate", lane="provisioning", key=NET,
+                                   kind="activation", summary="test", payload={}), attempt=attempt)
+
+
+def test_rollback_runs_while_the_bus_drops_progress_events():
+    # Kafka refuses the progress events but takes the ownership records: the rollback still deletes the ONT
     async def scenario():
         gateway, backend = make_gateway()
-        context = JobContext(DownBus(), Command(id="job-1", action="activate", lane="provisioning", key=NET,
-                                                kind="activation", summary="test", payload={}), attempt=1)
+        with pytest.raises(NbiRejectedError, match="NOPE-BW"):
+            await activate_ont(flaky_context(FlakyBus(takes=("ownership",))), gateway, NET, rejected_request(),
+                               verify_timeout=0, poll_seconds=0)
+        assert all(o.state.serial_number != NEW_SERIAL for o in backend._onts.values())
+
+    asyncio.run(scenario())
+
+
+def test_an_ont_whose_creation_cannot_be_recorded_is_deleted_again():
+    # Unrecorded, a later attempt would take it for someone else's and never roll it back
+    async def scenario():
+        gateway, backend = make_gateway()
+        with pytest.raises(BusUnavailableError):
+            await activate_ont(flaky_context(FlakyBus()), gateway, NET, rejected_request(),
+                               verify_timeout=0, poll_seconds=0)
+        assert all(o.state.serial_number != NEW_SERIAL for o in backend._onts.values())
+
+    asyncio.run(scenario())
+
+
+def test_a_later_attempt_rolls_back_the_ont_an_earlier_one_created():
+    # Attempt 1 creates the ONT and binds the first service, then CMS stops answering. Attempt 2
+    # finds both in the job's history, carries on, is refused the second service, and rolls back
+    # the ONT and the service attempt 1 bound
+    async def scenario():
+        gateway, backend = make_gateway()
+        bus = FlakyBus(takes=("ownership", "step", "log", "warning", "status"))
+        real_add, calls = backend.add_ethernet_service, []
+
+        async def times_out_on_the_second(network, ont_id, service):
+            calls.append(service.ont_port)
+            if len(calls) == 2:
+                raise NbiTimeoutError("CMS did not answer.")
+            await real_add(network, ont_id, service)
+
+        backend.add_ethernet_service = times_out_on_the_second
+        with pytest.raises(NbiTimeoutError):
+            await activate_ont(flaky_context(bus), gateway, NET, rejected_request(), verify_timeout=0, poll_seconds=0)
+        assert [u.data["service"]["ont_port"] for u in bus.published if u.type == "ownership" and "service" in u.data] == [1]
+
+        context = flaky_context(bus, attempt=2)
         with pytest.raises(NbiRejectedError, match="NOPE-BW"):
             await activate_ont(context, gateway, NET, rejected_request(), verify_timeout=0, poll_seconds=0)
+        messages = [u.message for u in bus.published]
+        assert any("by an earlier attempt of this job" in m for m in messages)
+        assert any(m.startswith("Rolled back") for m in messages)
         assert all(o.state.serial_number != NEW_SERIAL for o in backend._onts.values())
+
+    asyncio.run(scenario())
+
+
+def test_a_job_that_succeeded_does_not_own_what_it_created():
+    # A redelivery after SUCCEEDED (its acknowledgement lost) must not roll back a working customer
+    async def scenario():
+        gateway, backend = make_gateway()
+        bus = FlakyBus(takes=("ownership", "step", "log", "warning", "status", "result"))
+        request = rejected_request()
+        request.services[1].bandwidth_profile = "RES-1G"
+        await activate_ont(flaky_context(bus), gateway, NET, request, verify_timeout=0, poll_seconds=0)
+        await flaky_context(bus)._publish("result", "Finished", status=JobStatus.SUCCEEDED)
+
+        backend._onts[next(i for i, o in backend._onts.items() if o.state.serial_number == NEW_SERIAL)] \
+            .state.services.pop()  # the second service has gone since, so the re-run adds it, and is refused
+        request.services[1].bandwidth_profile = "NOPE-BW"
+        with pytest.raises(NbiRejectedError):
+            await activate_ont(flaky_context(bus, attempt=2), gateway, NET, request, verify_timeout=0, poll_seconds=0)
+        assert any(o.state.serial_number == NEW_SERIAL for o in backend._onts.values())
 
     asyncio.run(scenario())
 

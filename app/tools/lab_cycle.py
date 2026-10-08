@@ -79,6 +79,12 @@ class PrintingContext:
     async def step(self, number: int, total: int, message: str) -> None:
         print(f"      {number}/{total} {message}", file=self.out)
 
+    async def record_ownership(self, message: str, /, **data: Any) -> None:
+        await self.emit("ownership", message, **data)
+
+    async def ownership_records(self) -> List[Dict[str, Any]]:
+        return []  # one run, no earlier attempts
+
 
 class LabCycle:
     def __init__(self, gateway: NbiGateway, args: argparse.Namespace, out=sys.stdout):

@@ -25,12 +25,12 @@ run as their own pods: `python -m app.worker`.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional, Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 from app import audit
 from app.messaging.bus import BusUnavailableError, CommandConsumer, Delivery, MessageBus
-from app.models.job_model import Command, JobStatus, JobUpdate
+from app.models.job_model import OWNERSHIP, Command, JobStatus, JobUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -50,17 +50,48 @@ class JobError(Exception):
         return {"code": self.code, "message": self.message, "retryable": self.retryable, **self.data}
 
 
+# How far before the command's earlier timestamp to start reading its job's history, for clocks that
+# disagree, and how long the read may take before the attempt fails and is retried
+HISTORY_MARGIN = timedelta(minutes=10)
+HISTORY_TIMEOUT = 30.0
+
+
 class JobContext:
     """Handed to a handler so it can report progress on its job"""
 
-    def __init__(self, bus: MessageBus, command: Command, attempt: int):
+    def __init__(self, bus: MessageBus, command: Command, attempt: int, queued_at: Optional[datetime] = None):
         self._bus = bus
         self._loop = asyncio.get_running_loop()
         self.command = command
         self.job_id = command.id
         self.attempt = attempt
+        self.queued_at = queued_at
         self._outbox: Optional[asyncio.Queue] = None
         self._pump: Optional[asyncio.Task] = None
+
+    async def record_ownership(self, message: str, /, **data: Any) -> None:
+        """
+        Record in the job's history something this job created in CMS. Unlike emit(), it must land:
+        it waits for the bus and raises BusUnavailableError if the bus will not take it. A record
+        that is missing means "not this job's", so a later attempt leaves that thing alone.
+        """
+        await self._publish(OWNERSHIP, message, data)
+
+    async def ownership_records(self) -> List[Dict[str, Any]]:
+        """
+        The data of every ownership record earlier attempts of this job published. Reads the job's
+        history from a little before the earlier of the command's own time and when the bus stored
+        it. Raises BusUnavailableError if the history cannot be read; nothing has been changed then,
+        so the attempt is retried.
+
+        Empty once the job has succeeded: what it created is then a working customer's, and a
+        redelivery (its acknowledgement lost) must not treat it as its own to roll back.
+        """
+        times = [t for t in (self.command.created_at, self.queued_at) if t is not None]
+        history = await self._bus.job_history(self.job_id, min(times) - HISTORY_MARGIN, timeout=HISTORY_TIMEOUT)
+        if any(u.status == JobStatus.SUCCEEDED for u in history):
+            return []
+        return [u.data or {} for u in history if u.type == OWNERSHIP]
 
     async def emit(self, type: str, message: str, /, **data: Any) -> None:
         """
@@ -177,7 +208,7 @@ class Worker:
 
     async def _handle(self, consumer: CommandConsumer, delivery: Delivery) -> None:
         command = delivery.command
-        context = JobContext(self._bus, command, delivery.attempt)
+        context = JobContext(self._bus, command, delivery.attempt, delivery.queued_at)
         age = command_age(command, delivery)
         expired = age > self.max_command_age
 

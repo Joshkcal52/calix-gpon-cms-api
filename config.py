@@ -165,7 +165,8 @@ class Settings(BaseSettings):
 
     def check_worker_timeouts(self, lanes: List[str]) -> None:
         """Refuse to start a worker whose slowest command could outlast Kafka's patience"""
-        slowest = self.activation_verify_timeout_seconds + 6 * self.nbi_timeout_seconds
+        from app.worker.runner import HISTORY_TIMEOUT  # an activation may read its job's history first
+        slowest = self.activation_verify_timeout_seconds + 6 * self.nbi_timeout_seconds + HISTORY_TIMEOUT
         if self.kafka_bootstrap_servers and slowest + 60 > self.kafka_max_poll_interval_seconds:
             raise ValueError(
                 f"KAFKA_MAX_POLL_INTERVAL_SECONDS ({self.kafka_max_poll_interval_seconds:g}) must be at least "

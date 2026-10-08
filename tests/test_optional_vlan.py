@@ -265,6 +265,12 @@ def test_activation_without_a_vlan_over_soap_is_repeat_safe(nbi_server):
         async def step(self, number, total, message):
             self.events.append(("step", message))
 
+        async def record_ownership(self, message, /, **data):
+            await self.emit("ownership", message, **data)
+
+        async def ownership_records(self):
+            return []
+
     async def scenario():
         gateway = NbiGateway(CmsBackend("127.0.0.1", port, "nbi-demo", "demo-password", timeout=3.0,
                                         router=MOCK_RG_ADDRESSING), timeout=5)
