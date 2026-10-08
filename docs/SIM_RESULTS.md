@@ -34,6 +34,8 @@ python tools/sim_signups.py --url http://127.0.0.1:8000 --backend e7-cli --custo
    - delete the last four customers with force (each must read 404 and be discovered again);
    - delete one of them a second time (must succeed as `already_absent`).
 
+   Since PR #10 was merged, deletes are sent with `voice_checked=true`, and the round also checks that a delete without it is refused and, on the in-process E7, that an ONT with a phone line the API cannot see is refused and linked to its PON again. The numbers below were taken before that change.
+
 ## Results
 
 Times are wall clock from the first POST to the last job finishing. Every job runs through the one embedded worker, one after another.

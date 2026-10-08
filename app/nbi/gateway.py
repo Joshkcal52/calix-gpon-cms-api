@@ -297,6 +297,9 @@ def build_gateway(settings: Any) -> NbiGateway:
         else:
             logger.warning(f"E7 CLI backend: provisioning over SSH on {', '.join(backend.nodes)}. NOT VERIFIED "
                            f"against a real E7; see app/nbi/e7_backend.py")
+            if not settings.known_bandwidth_profiles():
+                logger.warning("BANDWIDTH_PROFILES is not set: bandwidth profiles are not checked before a job is "
+                               "queued, so a mistyped one reaches the E7 mid-job (list the E7's names, not CMS IDs)")
         if (settings.e7_known_hosts or "").lower() == "none" and not settings.mock_mode:
             logger.warning("E7_KNOWN_HOSTS is none: the E7s' SSH host keys are not checked")
     elif choice == "cms":

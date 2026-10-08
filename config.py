@@ -142,9 +142,12 @@ class Settings(BaseSettings):
         listed = frozenset(p.strip() for p in (self.bandwidth_profiles or "").split(",") if p.strip())
         if listed:
             return listed
-        if self.mock_mode:
+        if self.mock_mode:  # the list of the mock in use: the simulated CMS or the mock E7, and a filled PON's extra
             from app.nbi.mock_cms import MOCK_BANDWIDTH_PROFILES
-            return frozenset(MOCK_BANDWIDTH_PROFILES)
+            from app.nbi.mock_e7 import BW_PROFILES
+            from app.nbi.mock_pon import EXTRA_BW_PROFILES
+            mock = BW_PROFILES if self.nbi_backend == "e7-cli" else MOCK_BANDWIDTH_PROFILES
+            return frozenset(mock + (EXTRA_BW_PROFILES if self.mock_pon_size else ()))
         return None
 
     def run_embedded_worker(self) -> bool:

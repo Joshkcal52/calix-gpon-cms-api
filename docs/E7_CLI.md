@@ -30,7 +30,7 @@ The commands are taken from Calix's public E7 EXA R3.x CLI reference and GPON ap
 | Change a service | `remove eth-svc <name> from-ont-port <id>/g<n>`, then `add eth-svc` with the same name and the new values. Every value read back that `add eth-svc` takes (VLANs, description, multicast profile, PON CoS, admin state) is carried over. If the E7 refuses the add, the old service is added back and the refusal is reported |
 | Remove a service | `remove eth-svc <name> from-ont-port <id>/g<n>` |
 | Change a port | `set ont-port <id>/g<n> [admin-state ...] [description ...] [subscriber-id ...] [eth-sec-profile ...]` |
-| Delete an ONT | `set ont <id> pon-port none` (unlink it from its PON: Calix's M&T guide says an ONT can only be deleted when its record is not linked to a discovered ONT), then `delete ont <id> forced` (the API itself still refuses unless no services remain or `force=true`) |
+| Delete an ONT | The API removes each data service first (`remove eth-svc`), then `set ont <id> pon-port none` (unlink it from its PON: Calix's M&T guide says an ONT can only be deleted when its record is not linked to a discovered ONT), then `delete ont <id>` **without** `forced`, so the E7 refuses while anything this API cannot see is left, such as a voice line. If it refuses, the ONT is linked to its PON again (`set ont <id> pon-port <the location show ont printed>`) and the refusal is reported. Only a rollback of an ONT the same signup just created uses `delete ont <id> forced`. An ONT whose profile has voice ports needs `voice_checked=true` |
 | Ports, profiles, VLANs | `show ont-port <id> detail`, `show ont-profile`, `show vlan` |
 
 What differs from CMS:

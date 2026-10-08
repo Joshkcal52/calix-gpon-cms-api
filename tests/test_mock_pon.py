@@ -115,7 +115,7 @@ def test_a_deleted_ont_takes_its_port_settings_with_it():
     e7 = MockE7()
     assert e7.run("create ont 7 profile 812G-1 serial-number 00C0FFEE") == ""
     assert e7.run("set ont-port 7/g1 admin-state disabled") == ""
-    assert e7.run("delete ont 7") == ""
+    assert e7.run("set ont 7 pon-port none") == "" and e7.run("delete ont 7") == ""
     assert e7.run("create ont 7 profile 812G-1 serial-number 00C0FFEE") == ""
     assert "Admin State     : enabled" in e7.run("show ont-port 7 detail")
 

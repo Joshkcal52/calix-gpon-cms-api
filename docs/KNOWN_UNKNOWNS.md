@@ -2,7 +2,7 @@
 
 Everything about this project that is untested, guessed, or not built, in one place. Read it before trusting the code with live subscribers. [HANDOFF.md](../HANDOFF.md) has the short version; [ARCHITECTURE.md](ARCHITECTURE.md) has the design.
 
-Status words used below: **verified** means tested against the mock CMS (never a real one); **inferred** means guessed from public sources; **not built** means the code refuses or skips it.
+Status words used below: **verified** means tested against the mock CMS or mock E7 (never a real one); **inferred** means guessed from public sources; **not built** means the code refuses or skips it.
 
 ## Who does the CMS work, and when
 
@@ -41,17 +41,27 @@ The risk: CMS's "force" delete removes an ONT with everything on it, and this AP
 
 **Inferred, not verified:** that CMS refuses a delete without force while services are left, and accepts one when nothing is left. If it insists on force even for an empty ONT, the API's delete fails (safely) and `app/controller/lifecycle_controller.py` must change. `lab_cycle` checks exactly this on a spare ONT. Also see "an empty read" above.
 
+## The E7 command-line path
+
+For a CMS without the NBI licence, the API provisions through each E7's CLI over SSH (`app/nbi/e7_backend.py`, [E7_CLI.md](E7_CLI.md)). It has only met the mock E7 (`app/nbi/mock_e7.py`), whose output is invented.
+
+- **Command syntax is from Calix's public CLI reference; the output is not documented.** The parsers, the prompt, the refusal wording and which words mean "online" are guesses the mock shares. `python -m app.tools.e7_capture` (show commands only) settles them; fix the parsers against its captures before any write.
+- **Port bridge/router mode reads `unknown`** and cannot be set, so the SMx plan refuses every subscriber on this path until a capture from an 844G shows where the E7 prints it.
+- **Deleting an ONT** removes its data services, unlinks it from its PON (Calix requires that before a delete), then sends `delete ont` without `forced`. That the E7 then refuses while a voice service is left, and that `set ont <id> pon-port <location>` links it again in the form `show ont <id> detail` prints, are both inferred. If linking it again fails, the error says the ONT is unlinked and out of service. A refused delete has already removed the data services, as on the CMS path.
+- **Names, not IDs.** Bandwidth profiles, tag actions, ONT profiles and services are sent by name; `BANDWIDTH_PROFILES` and the mapping files need the E7's names, not CMS's IDs. Service names default to `Data1`..`Data8` (`E7_SERVICE_NAMES`).
+- **One SSH session per E7, one job at a time.** In simulation the session is the limit for one E7 (see [SIM_RESULTS.md](SIM_RESULTS.md)); how long a real E7 takes per command is unknown.
+
 ## Bandwidth profiles
 
 The bug: an unknown bandwidth profile was accepted, and on a real CMS it would only have been refused mid-job, or worse, a valid but wrong ID would have applied another speed tier. Now:
 
-- `BANDWIDTH_PROFILES` (copied by hand from CMS; this API cannot list them) is checked before an activation, signup or service change is queued, and again by the worker for signups from the events topic. **Unset, nothing is checked** before CMS. Set it before going live.
+- `BANDWIDTH_PROFILES` (copied by hand from CMS, or the E7's names on the E7 path; this API cannot list them) is checked before an activation, signup or service change is queued, and again by the worker for signups from the events topic. **Unset, nothing is checked** before CMS. Set it before going live.
 - The simulated CMS refuses an unknown profile too, as it does an unknown ONT profile or VLAN.
 - A valid ID that is the wrong tier for the customer cannot be caught here; that is billing's data.
 
 ## The SMx side
 
-SMx parameter names come from the IDI billing SMx R24.x docs, not from SMx. Every entry in `smx_map.yml` and `profile_map.yml` is a demo value. Nothing here writes to SMx or Sonar. `XgsMigrationRequest` is this project's proposal for the migration topic, not a known schema.
+SMx parameter names come from the IDI billing SMx R24.x docs, not from SMx. Every entry in `smx_map.yml` and `profile_map.yml` is a demo value. Nothing here writes to SMx or Sonar. `XgsMigrationRequest` is this project's proposal for the migration topic, not a known schema. Whether customers keep their ONT through a cutover is not settled: the export carries the existing serial, and a replacement serial can be filled in. What the cutover tools hand over is in [CUTOVER.md](CUTOVER.md).
 
 ## Deployment gaps
 
@@ -74,4 +84,4 @@ What to know when choosing:
 
 ## How it was written
 
-Most of this code was written by Claude (Anthropic's AI model) in Claude Code sessions: 18 of the 20 non-merge commits, and every line of the current application since the first commit (an earlier SSH-based project that has since been removed). The project's owner merged each change through a pull request after its tests passed. Review it as unfamiliar code: the tests show what was checked against the mocks, and this page shows what was not, but nobody should assume a person has read and understood every line.
+Most of this code was written by Claude (Anthropic's AI model) in Claude Code sessions: every non-merge commit except the first and one that added a prompt file, and every line of the current application since the first commit (an earlier SSH-based project that has since been removed). The project's owner merged each change through a pull request after its tests passed. Review it as unfamiliar code: the tests show what was checked against the mocks, and this page shows what was not, but nobody should assume a person has read and understood every line.

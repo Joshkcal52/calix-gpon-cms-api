@@ -342,11 +342,46 @@ class E7CliBackend:
         if parts:
             await self._change(network, f"set ont-port {port} {' '.join(parts)}")
 
-    async def delete_ont(self, network: str, ont_id: int) -> None:
-        # Unlink it from its PON first (Calix, set ont: "pon-port ... none to unlink this ONT from the current
-        # physical location"), then "forced - Deletes the ONT, even if ports are non-default or services exist"
+    async def delete_ont(self, network: str, ont_id: int, *, force: bool) -> None:
+        """
+        Unlink the ONT from its PON first (Calix, set ont: "pon-port ... none to unlink this ONT from the current
+        physical location"; the M&T guide: an ONT can only be deleted once unlinked), then delete it.
+
+        With force, "delete ont <id> forced" ("Deletes the ONT, even if ports are non-default or services
+        exist"), voice included, which this backend does not read: only for an ONT this API just created.
+        Without it, plain "delete ont <id>", which the E7 should refuse while any service is left. Then the
+        ONT is linked to its PON again (set ont <id> pon-port <where it was>), so a refused delete does not
+        leave the customer cut off, and the refusal is reported. Re-linking is documented; the form of the
+        PON location it takes is not, and is the one show ont <id> detail printed (unverified).
+        """
+        if force:
+            await self._change(network, f"set ont {ont_id} pon-port none")
+            await self._change(network, f"delete ont {ont_id} forced")
+            return
+        location = await self._pon_location(network, ont_id)
         await self._change(network, f"set ont {ont_id} pon-port none")
-        await self._change(network, f"delete ont {ont_id} forced")
+        try:
+            await self._change(network, f"delete ont {ont_id}")
+        except NbiError as refused:
+            if location is None:
+                raise
+            try:
+                await self._change(network, f"set ont {ont_id} pon-port {arg(location)}")
+            except NbiError as e:
+                raise NbiConflictError(
+                    f"E7 {network} refused to delete ONT {ont_id} without forced ({refused.message}), and linking it "
+                    f"to PON port {location} again failed ({e.message}). ONT {ont_id} is UNLINKED from its PON and "
+                    f"is out of service until someone links it again on the E7.") from refused
+            raise NbiConflictError(
+                f"E7 {network} refused to delete ONT {ont_id} without forced: {refused.message.rstrip('.')}. Something this API "
+                f"cannot see, such as a voice service, may still be on it. It has been linked to PON port {location} "
+                f"again. Nothing was deleted.") from refused
+
+    async def _pon_location(self, network: str, ont_id: int) -> Optional[str]:
+        """Where an ONT is linked, exactly as show ont <id> detail prints it, or None if it is not linked"""
+        row = parse.merged(await self._show(network, f"show ont {ont_id} detail"))
+        location = parse.value(row, "pon-port")
+        return None if location in (None, "", "-", "none") else location
 
     async def close(self) -> None:
         for session in self.sessions.values():

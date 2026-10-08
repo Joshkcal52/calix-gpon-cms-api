@@ -43,6 +43,9 @@ class MockE7:
         self.onts: Dict[int, Dict[str, str]] = {}
         self.services: Dict[int, List[Dict[str, str]]] = {}
         self.ports: Dict[Tuple[int, str], Dict[str, str]] = {}
+        # Phone lines per ONT. Never shown by show ont-port eth-svc (the backend does not read voice), but a
+        # delete without forced is refused while one is there, so tests can show voice is not deleted unseen
+        self.voice_lines: Dict[int, int] = {}
         # Physically present on a PON: serial -> (model, pon)
         self.present: Dict[str, Tuple[str, str]] = {
             "00A3F104": ("844G", "1/1/1"), "00B2C201": ("812G", "1/1/2"), "00C0FFEE": ("716GE-I", "1/2/1")}
@@ -137,6 +140,11 @@ class MockE7:
             for key, val in _options(w[3:]).items():
                 if key == "pon-port" and val == "none":
                     self.onts[ont]["linked"] = ""
+                elif key == "pon-port":  # link it again, to the PON its serial number is seen on
+                    serial = self.onts[ont]["serial"]
+                    if self.present.get(serial, (None, None))[1] != val:
+                        raise _Refused(f"ONT {ont} (serial {serial}) is not discovered on PON port {val}.")
+                    self.onts[ont]["linked"] = serial
                 elif key in ("subscriber-id", "description"):
                     self._check_length(key, val)
                     self.onts[ont][{"subscriber-id": "subscriber"}.get(key, key)] = val
@@ -147,10 +155,14 @@ class MockE7:
             return ""
         if w[:2] == ["delete", "ont"] and len(w) in (3, 4):
             ont = self._ont(w[2])
-            if w[3:] != ["forced"] and (self.services.get(ont)):
+            # Calix's M&T guide: an ONT can only be deleted once its record is unlinked from the discovered ONT
+            if self.onts[ont]["linked"]:
+                raise _Refused(f"ONT {ont} is linked to a discovered ONT; unlink it first (set ont {ont} pon-port none).")
+            if w[3:] != ["forced"] and (self.services.get(ont) or self.voice_lines.get(ont)):
                 raise _Refused(f"ONT {ont} has services; remove them first or use forced.")
             del self.onts[ont]
             self.services.pop(ont, None)
+            self.voice_lines.pop(ont, None)
             for key in [k for k in self.ports if k[0] == ont]:
                 del self.ports[key]  # a new ONT under the same ID starts with default ports
             return ""

@@ -278,7 +278,7 @@ def test_writes_send_the_documented_commands(e7):
             assert [p.port for p in ports.ethernet] == ["eth1", "eth2", "eth3", "eth4"]
             assert ports.ethernet[1].description == "Office desk"
             assert ports.router.present is True and ports.router.services == 1
-            await backend.delete_ont(NET, 2001)
+            await backend.delete_ont(NET, 2001, force=True)
             with pytest.raises(NbiNotFoundError):
                 await backend.get_ont(NET, 2001)
         finally:
@@ -579,7 +579,7 @@ def test_the_capture_tool_refuses_anything_but_show(e7):
         try:
             assert (await backend.get_ont(NET, 101)).ont_id == 101
             with pytest.raises(CommandBlocked):
-                await backend.delete_ont(NET, 101)
+                await backend.delete_ont(NET, 101, force=True)
         finally:
             await backend.close()
         assert 101 in mock.onts and sent(mock) == []

@@ -382,10 +382,36 @@ def lifecycle_round(sim: Sim, customers: List[Dict[str, Any]], records: List[Dic
             customer["services"])
         sim.check(steps[-1]["verified"], f"ONT {ont_id} services after the profile change: {after}")
 
-    # Delete the last four customers
+    def refused(what: str, path: str) -> Dict[str, Any]:
+        """A delete that must fail, leaving the ONT in place"""
+        start = time.perf_counter()
+        job = next(iter(sim.wait([sim.submit("DELETE", path)]).values()))
+        steps.append({"step": what, "status": job["status"], "seconds": round(time.perf_counter() - start, 3),
+                      "error": (job.get("error") or {}).get("message")})
+        return job
+
+    # A delete without voice_checked is refused: every simulated profile has voice ports
+    customer, ont_id = ok[-5]
+    job = refused(f"delete ONT {ont_id} without voice_checked (must be refused)",
+                  f"/onts/{ont_id}?serial_number={customer['serial_number']}&force=true")
+    steps[-1]["verified"] = job["status"] == "failed" and sim.get(f"/onts/{ont_id}").status_code == 200
+    sim.check(steps[-1]["verified"], f"ONT {ont_id} delete without voice_checked was not refused: {job}")
+
+    # On the in-process E7: a phone line the API cannot see stops the delete, and the ONT stays online
+    if sim.api and sim.api.mock_e7:
+        sim.api.mock_e7.voice_lines[ont_id] = 1
+        job = refused(f"delete ONT {ont_id} with a hidden voice line (must be refused)",
+                      f"/onts/{ont_id}?serial_number={customer['serial_number']}&force=true&voice_checked=true")
+        ont = sim.get(f"/onts/{ont_id}").json()
+        steps[-1]["verified"] = (job["status"] == "failed" and ont.get("oper_state") == "online"
+                                 and ont.get("services") == [])
+        steps[-1]["after"] = {"oper_state": ont.get("oper_state"), "services": len(ont.get("services") or [])}
+        sim.check(steps[-1]["verified"], f"ONT {ont_id} with a voice line: {job.get('error')}, now {ont}")
+
+    # Delete the last four customers (their ONTs have no voice: what voice_checked=true says)
     for customer, ont_id in ok[-4:]:
         run(f"delete ONT {ont_id} ({customer['subscriber_id']})", "DELETE",
-            f"/onts/{ont_id}?serial_number={customer['serial_number']}&force=true")
+            f"/onts/{ont_id}?serial_number={customer['serial_number']}&force=true&voice_checked=true")
         gone = sim.get(f"/onts/{ont_id}").status_code == 404
         rediscovered = any(d["serial_number"] == customer["serial_number"] for d in sim.get("/onts/discovered").json())
         steps[-1]["verified"] = gone and rediscovered
@@ -393,7 +419,8 @@ def lifecycle_round(sim: Sim, customers: List[Dict[str, Any]], records: List[Dic
         sim.check(rediscovered, f"{customer['serial_number']} not discovered again after delete")
     # A delete repeated is safe
     customer, ont_id = ok[-1]
-    job = run(f"delete ONT {ont_id} again", "DELETE", f"/onts/{ont_id}?serial_number={customer['serial_number']}&force=true")
+    job = run(f"delete ONT {ont_id} again", "DELETE",
+              f"/onts/{ont_id}?serial_number={customer['serial_number']}&force=true&voice_checked=true")
     steps[-1]["verified"] = (job.get("result") or {}).get("already_absent") is True
     report["lifecycle"] = steps
 
