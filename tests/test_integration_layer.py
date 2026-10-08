@@ -397,6 +397,23 @@ def test_a_finished_job_keeps_its_status_when_the_command_runs_again():
     assert len(asyncio.run(_all_events(jobs, "j1"))) == 5  # still in the job's log
 
 
+def test_a_failed_job_that_then_succeeds_says_succeeded():
+    # FAILED was published, the park or the acknowledgement was lost, and the re-run succeeded:
+    # the customer is provisioned, so the job must not keep saying it failed
+    jobs = JobStore(InMemoryBus())
+
+    def update(status, type="status"):
+        return JobUpdate(job_id="j1", kind="activation", summary="s", type=type, message=type, status=status)
+
+    for status in (JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.FAILED, JobStatus.RUNNING):
+        jobs.apply(update(status))
+    assert jobs.get("j1").status == JobStatus.FAILED  # the re-run's RUNNING does not reopen it
+    jobs.apply(update(JobStatus.SUCCEEDED, type="result"))
+    assert jobs.get("j1").status == JobStatus.SUCCEEDED
+    jobs.apply(update(JobStatus.FAILED, type="error"))  # and a later FAILED does not take that back
+    assert jobs.get("j1").status == JobStatus.SUCCEEDED
+
+
 async def _all_events(jobs, job_id):
     return [e async for e in jobs.events(job_id)]
 

@@ -195,7 +195,12 @@ class LabCycle:
                          f"profile to {self.args.change_bandwidth_profile!r}.")
 
     async def refused_delete(self) -> None:
-        # Sent straight to the gateway: the API's own delete would refuse before sending
+        # Sent straight to the gateway: the API's own delete would refuse before sending. If CMS
+        # accepts it the ONT is gone, so make sure first that the ONT ID still holds the ONT this
+        # run created (start() refused a serial that was already provisioned)
+        ont = await self.gateway.get_ont(self.network, self.ont_id)
+        if ont.serial_number != self.args.serial:
+            raise Failed(f"ONT {self.ont_id} now holds {ont.serial_number}, not {self.args.serial}. Not sent.")
         try:
             await self.gateway.delete_ont(self.network, self.ont_id, force=False)
         except NbiError as e:

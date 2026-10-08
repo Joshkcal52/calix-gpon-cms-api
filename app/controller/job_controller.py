@@ -95,11 +95,13 @@ class JobStore:
         job = record.job
         if update.requested_by and not job.requested_by:
             job.requested_by = update.requested_by
-        # A finished job's status is final. A command can run again after its outcome was published
-        # (its acknowledgement lost, or the topic re-read by a new consumer group), and that run's
-        # RUNNING, or the FAILED of a command now too old to run, must not overturn it. The
-        # update still goes in the job's event log below.
-        if update.status is not None and not record.done:
+        # A finished job's status is final, with one exception. A command can run again after its
+        # outcome was published (its acknowledgement lost, or the topic re-read by a new consumer
+        # group), and that run's RUNNING, or the FAILED of a command now too old to run, must not
+        # overturn it. A SUCCEEDED after FAILED does: the work is done in CMS, so the job says so.
+        # Either way the update goes in the job's event log below.
+        final = record.done and not (job.status == JobStatus.FAILED and update.status == JobStatus.SUCCEEDED)
+        if update.status is not None and not final:
             job.status = update.status
             if update.status == JobStatus.RUNNING:
                 job.started_at = job.started_at or update.timestamp

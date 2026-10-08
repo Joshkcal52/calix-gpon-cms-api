@@ -57,6 +57,7 @@ class FakeConsumer:
         self.options = options
         self.position = 0
         self.actions = []  # ("commit", offset) / ("seek", offset)
+        self.polled = []  # monotonic time of each getmany
         FakeConsumer.last = self
         FakeConsumer.instances.append(self)
 
@@ -68,10 +69,12 @@ class FakeConsumer:
 
     async def getmany(self, timeout_ms=0, max_records=None):
         assert max_records == 1
-        if self.position >= len(self.records):
+        self.polled.append(time.monotonic())
+        records = [r for r in self.records if r.topic in self.topics]
+        if self.position >= len(records):
             await asyncio.sleep(0.001)
             return {}
-        record = self.records[self.position]
+        record = records[self.position]
         self.position += 1
         return {TopicPartition(record.topic, record.partition): [record]}
 
@@ -203,6 +206,42 @@ def test_a_command_kafka_has_held_too_long_is_not_run_whatever_its_own_time_says
     parked = [s for s in bus._producer.sent if s[1] == "gpon-cms.commands.dlq"]
     assert len(parked) == 1 and dict(parked[0][4])["error-code"] == b"command_expired"
     assert [a for a in consumer.actions if a[0] != "stop"] == [("commit", 1)]
+
+
+def test_while_one_lane_runs_a_long_command_neither_lane_is_polled(bus):
+    # A worker is one loop: while a handler runs, no consumer is polled, the busy lane's own
+    # included. The idle lane is no worse off than the busy one, as with one consumer for both
+    # lanes before. Both rely on KAFKA_MAX_POLL_INTERVAL_SECONDS outlasting the slowest command
+    # (Settings.check_worker_timeouts).
+    bus.register_lane("legacy", "legacy-gpon-events", encode=lambda c: b"", decode=lambda raw: None)
+    FakeConsumer.records = [record(0, make_command(1))]
+
+    ran = []
+
+    async def slow_handler(context, payload):
+        start = time.monotonic()
+        await asyncio.sleep(0.3)
+        ran.append((start, time.monotonic()))
+        return {}
+
+    async def scenario():
+        worker = Worker(bus, ["provisioning", "legacy"], {"DO": slow_handler})
+        task = asyncio.create_task(worker.run())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not any(
+                a == "commit" for c in FakeConsumer.instances for a, _ in c.actions):
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.05)
+        worker.stop()
+        await task
+
+    asyncio.run(scenario())
+    busy, idle = FakeConsumer.instances  # provisioning, legacy (lanes are sorted: legacy first)
+    busy, idle = (busy, idle) if busy.topics == (TOPIC,) else (idle, busy)
+
+    (start, end), = ran
+    assert busy.polled and idle.polled
+    assert not [p for p in busy.polled + idle.polled if start < p < end]
 
 
 def test_offset_is_committed_only_after_success(bus):
