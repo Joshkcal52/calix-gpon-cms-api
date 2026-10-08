@@ -256,22 +256,48 @@ class NotConfiguredBackend:
         return None
 
 
+def backend_choice(settings: Any) -> str:
+    """
+    Which backend provisions: "cms" (the CMS NBI) or "e7-cli" (each E7's command line), or "none".
+    NBI_BACKEND picks one; "auto" (the default) takes whichever of CMS_HOST and E7_NODES is set.
+    With MOCK_MODE on, "auto" and "cms" mean the simulated CMS and "e7-cli" the mock E7.
+    """
+    choice = getattr(settings, "nbi_backend", "auto")
+    e7_nodes = getattr(settings, "e7_nodes", None)
+    if choice != "auto":
+        return choice
+    if settings.mock_mode:
+        return "cms"
+    if settings.cms_host and e7_nodes:
+        raise ValueError("CMS_HOST and E7_NODES are both set: choose one with NBI_BACKEND=cms or NBI_BACKEND=e7-cli "
+                         "(or python main.py --backend cms|e7-cli)")
+    return "cms" if settings.cms_host else "e7-cli" if e7_nodes else "none"
+
+
 def build_gateway(settings: Any) -> NbiGateway:
     """Create the gateway for the current configuration"""
-    if settings.mock_mode:
+    choice = backend_choice(settings)
+    if choice == "cms" and settings.mock_mode:
         from app.nbi.mock_cms import MockCmsBackend
         backend: NbiBackend = MockCmsBackend()
         logger.warning("MOCK_MODE is on: CMS calls go to a simulated CMS, not a real one")
-    elif settings.cms_host and getattr(settings, "e7_nodes", None):
-        raise ValueError("Set CMS_HOST (provision through CMS) or E7_NODES (through each E7's CLI), not both")
-    elif getattr(settings, "e7_nodes", None):
+    elif choice == "e7-cli":
+        if not getattr(settings, "e7_nodes", None):
+            raise ValueError("NBI_BACKEND=e7-cli needs E7_NODES (NAME=host[:port],...). With MOCK_MODE on, "
+                             "python main.py starts a mock E7 itself; a separate worker needs E7_NODES pointing at "
+                             "one (python -m app.nbi.mock_e7)")
         from app.nbi.e7_backend import backend_from_settings
         backend = backend_from_settings(settings)
-        logger.warning(f"E7 CLI backend: provisioning over SSH on {', '.join(backend.nodes)}. NOT VERIFIED against "
-                       f"a real E7; see app/nbi/e7_backend.py")
-        if (settings.e7_known_hosts or "").lower() == "none":
+        if settings.mock_mode:
+            logger.warning(f"MOCK_MODE is on: E7 CLI calls go to a mock E7 ({', '.join(backend.nodes)}), not a real one")
+        else:
+            logger.warning(f"E7 CLI backend: provisioning over SSH on {', '.join(backend.nodes)}. NOT VERIFIED "
+                           f"against a real E7; see app/nbi/e7_backend.py")
+        if (settings.e7_known_hosts or "").lower() == "none" and not settings.mock_mode:
             logger.warning("E7_KNOWN_HOSTS is none: the E7s' SSH host keys are not checked")
-    elif settings.cms_host:
+    elif choice == "cms":
+        if not settings.cms_host:
+            raise ValueError("NBI_BACKEND=cms needs CMS_HOST")
         from app.nbi.cms_backend import CmsBackend
         from app.nbi.router_side import router_side_addressing
         backend = CmsBackend(

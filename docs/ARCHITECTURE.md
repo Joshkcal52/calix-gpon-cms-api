@@ -153,7 +153,7 @@ Every error reaches the client, or the failed job, in one shape: CMS failures, A
 
 | Mode | How | Use |
 |---|---|---|
-| Single process | `MOCK_MODE=true python main.py` | Development. In-process queue, embedded worker, simulated CMS. No API key needed unless `API_KEYS` is set (then it is enforced, as it always is with `MOCK_MODE` off). Jobs are lost on restart. |
+| Single process | `MOCK_MODE=true python main.py` | Development. In-process queue, embedded worker, simulated CMS (or a mock E7 with `--backend e7-cli`). No API key needed unless `API_KEYS` is set (then it is enforced, as it always is with `MOCK_MODE` off). Jobs are lost on restart. |
 | Demo topology | `deploy/demo/` (Docker Compose, or four local processes) | Kafka, API, worker, mock CMS NBI server and a stand-in XGS listener. |
 | Production shape | API: `uvicorn main:app`. Workers: `WORKER_LANES=provisioning` and `WORKER_LANES=legacy python -m app.worker`. `CMS_HOST` and `API_KEYS` set. | See `deploy/k8s/gpon-cms.yaml`. |
 

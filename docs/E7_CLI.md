@@ -13,7 +13,7 @@ export NBI_TIMEOUT_SECONDS=30                           # an E7 call runs severa
 python -m app.tools.e7_capture --network OLT-04 --ont-id <an 844G with services> --out ./e7-captures
 ```
 
-Each E7's SSH host key must be in `~/.ssh/known_hosts` (or the file `E7_KNOWN_HOSTS` names). Add it with `ssh-keyscan`. `E7_KNOWN_HOSTS=none` turns the check off; use that in a lab only. `E7_NODES` and `CMS_HOST` cannot both be set.
+Each E7's SSH host key must be in `~/.ssh/known_hosts` (or the file `E7_KNOWN_HOSTS` names). Add it with `ssh-keyscan`. `E7_KNOWN_HOSTS=none` turns the check off; use that in a lab only. If `CMS_HOST` is also set, choose the path with `NBI_BACKEND=cms|e7-cli` or `python main.py --backend cms|e7-cli`; with both set and no choice, the API refuses to start. `python main.py --mock --backend e7-cli` runs the whole API against a mock E7 it starts itself (network `E7-MOCK`). A separate worker process (`python -m app.worker`) does not start one: point its `E7_NODES` at `python -m app.nbi.mock_e7`.
 
 ## How the API maps onto the CLI
 

@@ -31,8 +31,14 @@ class Settings(BaseSettings):
     # (the name is logged with each request). See app/auth.py.
     api_keys: Optional[str] = None
 
-    # Mock mode: use the simulated CMS (app/nbi/mock_cms.py) instead of a real one.
-    # For development without CMS access. Set MOCK_MODE=true in .env
+    # Which backend provisions: cms (the CMS northbound interface, CMS_HOST), e7-cli (each E7's command line
+    # over SSH, E7_NODES), or auto: whichever of the two is set (an error if both are). With both configured,
+    # pick one here or at startup: python main.py --backend cms|e7-cli
+    nbi_backend: Literal["auto", "cms", "e7-cli"] = "auto"
+
+    # Mock mode: a simulated CMS (app/nbi/mock_cms.py), or with NBI_BACKEND=e7-cli a mock E7
+    # (app/nbi/mock_e7.py) that python main.py starts itself. For development without CMS or E7 access.
+    # Set MOCK_MODE=true in .env, or python main.py --mock
     mock_mode: bool = False
 
     # --- CMS northbound interface (the fast lane) ---

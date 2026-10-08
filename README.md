@@ -26,6 +26,8 @@ pip install -r requirements.txt
 MOCK_MODE=true python main.py
 ```
 
+That simulates CMS. To try the E7 command-line path instead, `python main.py --mock --backend e7-cli` starts a mock E7 inside the API (its network is `E7-MOCK`).
+
 Interactive docs for every route are at http://localhost:8000/docs. In another terminal:
 
 ```bash
@@ -120,7 +122,7 @@ Before the first change on a real CMS, know that:
 
 ## Without the CMS NBI: the E7 command line
 
-If your CMS has no NBI licence, the API can provision through each E7 EXA's own CLI over SSH instead. Set `E7_NODES` (each name becomes a `{network}`) in place of `CMS_HOST`. Everything above the backend works the same. The commands follow Calix's public E7 EXA CLI reference, but Calix publishes almost no sample output, so the parsers are unverified. Run the read-only capture first:
+If your CMS has no NBI licence, the API can provision through each E7 EXA's own CLI over SSH instead. Set `E7_NODES` (each name becomes a `{network}`). With only one of `CMS_HOST` and `E7_NODES` set, that one is used. With both set, choose at startup with `python main.py --backend cms` or `--backend e7-cli` (or `NBI_BACKEND` in `.env`). Everything above the backend works the same. The commands follow Calix's public E7 EXA CLI reference, but Calix publishes almost no sample output, so the parsers are unverified. Run the read-only capture first:
 
 ```bash
 export E7_NODES=OLT-04=10.0.0.4 E7_USERNAME=... E7_PASSWORD=... NBI_TIMEOUT_SECONDS=30

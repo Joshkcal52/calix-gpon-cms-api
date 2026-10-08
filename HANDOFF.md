@@ -7,6 +7,7 @@
 ```bash
 pip install -r requirements.txt
 MOCK_MODE=true python main.py          # one process, simulated CMS, no Kafka, no API key needed
+python main.py --mock --backend e7-cli # the same over the E7 CLI path, against a mock E7 (network E7-MOCK)
 ```
 
 In another terminal (`http://localhost:8000/docs` has every route):

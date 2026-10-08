@@ -178,11 +178,36 @@ def test_e7_nodes_setting():
             nodes_from_settings(Settings(_env_file=None, e7_nodes=bad))
 
 
-def test_the_gateway_picks_the_e7_backend_and_refuses_both_backends_at_once():
+def test_the_gateway_picks_the_e7_backend_and_asks_which_when_both_are_set():
     gateway = build_gateway(Settings(_env_file=None, mock_mode=False, e7_nodes="OLT-04=10.0.0.4"))
     assert gateway.backend.name == "e7-cli" and list(gateway.backend.nodes) == ["OLT-04"]
-    with pytest.raises(ValueError, match="not both"):
-        build_gateway(Settings(_env_file=None, mock_mode=False, e7_nodes="OLT-04=10.0.0.4", cms_host="cms"))
+    both = dict(_env_file=None, mock_mode=False, e7_nodes="OLT-04=10.0.0.4", cms_host="cms")
+    with pytest.raises(ValueError, match="NBI_BACKEND"):
+        build_gateway(Settings(**both))
+    # NBI_BACKEND (or python main.py --backend) chooses
+    assert build_gateway(Settings(**both, nbi_backend="e7-cli")).backend.name == "e7-cli"
+    assert build_gateway(Settings(**both, nbi_backend="cms")).backend.name != "e7-cli"
+    with pytest.raises(ValueError, match="needs CMS_HOST"):
+        build_gateway(Settings(_env_file=None, mock_mode=False, e7_nodes="OLT-04=10.0.0.4", nbi_backend="cms"))
+    with pytest.raises(ValueError, match="needs E7_NODES"):
+        build_gateway(Settings(_env_file=None, mock_mode=False, cms_host="cms", nbi_backend="e7-cli"))
+    # MOCK_MODE alone is still the simulated CMS
+    assert build_gateway(Settings(_env_file=None, mock_mode=True)).backend.name != "e7-cli"
+
+
+def test_mock_mode_with_the_e7_backend_runs_the_api_against_a_mock_e7(monkeypatch):
+    """MOCK_MODE=true NBI_BACKEND=e7-cli python main.py: the API starts a mock E7 itself"""
+    from fastapi.testclient import TestClient
+    from config import settings
+    from main import app
+
+    for name, value in (("mock_mode", True), ("nbi_backend", "e7-cli"), ("e7_nodes", None),
+                        ("kafka_bootstrap_servers", None), ("api_keys", None)):
+        monkeypatch.setattr(settings, name, value)
+    with TestClient(app) as client:
+        assert client.get("/api/v2/status").json()["cms_backend"] == "e7-cli"
+        ont = client.get(f"/api/v2/networks/{NET}/onts/101").json()
+        assert ont["serial_number"] == "CXNK00B2C201"
 
 
 # --- Over SSH to the mock E7 ---------------------------------------------------------
