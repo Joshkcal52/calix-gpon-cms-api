@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from xml.etree import ElementTree
 
+import httpx
 import pytest
 import uvicorn
 
@@ -28,7 +29,7 @@ from app.models.provisioning_model import Attachment, EthernetService, OntSpec, 
 from app.nbi import mock_cms_server
 from app.nbi.client import CmsClient, to_data
 from app.nbi.cms_backend import CmsBackend
-from app.nbi.errors import NbiAuthError, NbiConnectionError, NbiNotFoundError
+from app.nbi.errors import NbiAuthError, NbiConnectionError, NbiNotFoundError, NbiTimeoutError
 from app.nbi.mock_cms import MOCK_NETWORK
 from app.nbi.router_side import MOCK_RG_ADDRESSING
 from config import Settings
@@ -353,3 +354,22 @@ def test_the_read_only_check_works_over_https(https_cms):
     assert run.returncode == 0, run.stdout + run.stderr
     assert f"https://127.0.0.1:{port}/cmsexc/ex/netconf" in run.stdout and "every step worked" in run.stdout
     assert [r for r in mock_cms_server.app.state.requests if r["kind"] == "edit"] == []
+
+
+@pytest.mark.parametrize("raised, expected, says", [
+    (httpx.ConnectTimeout, NbiConnectionError, "Nothing was sent"),  # never connected: a write cannot have landed
+    (httpx.ConnectError, NbiConnectionError, "Could not connect"),
+    (httpx.ReadTimeout, NbiTimeoutError, "did not answer"),  # sent, no answer: a write may have been applied
+])
+def test_a_connection_that_never_opens_is_unreachable_not_a_timeout(raised, expected, says):
+    """
+    The same on every OS: Linux refuses a closed port at once (ConnectError),
+    Windows retries until the connect timeout (ConnectTimeout).
+    """
+    def fail(request):
+        raise raised("simulated", request=request)
+
+    client = CmsClient("127.0.0.1", 1, "nbi-demo", "demo-password", timeout=0.5)
+    client._connection = lambda: httpx.AsyncClient(transport=httpx.MockTransport(fail))
+    with pytest.raises(expected, match=says):
+        asyncio.run(client.send("<x/>"))

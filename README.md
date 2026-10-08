@@ -156,12 +156,15 @@ Workers commit a Kafka offset only once a command has succeeded or its failure h
 
 ## Tests
 
+In a virtualenv, so the pinned versions are the ones tested:
+
 ```bash
+python -m venv venv && . venv/bin/activate      # Windows PowerShell: python -m venv venv; .\venv\Scripts\Activate.ps1
 pip install -r requirements-test.txt
-pytest
+python -m pytest
 ```
 
-Run on Python 3.10 and 3.12. The tests run every CMS operation through the CMS client over SOAP (HTTP and HTTPS) against the mock CMS server, check it sends the same requests cms-nbi-client did, and the queue rules over the Kafka wire protocol against an in-process Kafka mock.
+CI (`.github/workflows/tests.yml`) runs the same on Linux with Python 3.10 and 3.12 on every push and pull request. The tests run every CMS operation through the CMS client over SOAP (HTTP and HTTPS) against the mock CMS server, check it sends the same requests cms-nbi-client did, and the queue rules over the Kafka wire protocol against an in-process Kafka mock.
 
 ## Project layout
 
@@ -186,6 +189,7 @@ config.py       settings
 
 - [HANDOFF.md](HANDOFF.md): one page on what this is, what is proven, and where to start with a real CMS
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the design, the delivery rules, and the full list of what is inferred
+- [docs/KNOWN_UNKNOWNS.md](docs/KNOWN_UNKNOWNS.md): every open risk, guess and gap in one place, who owns the CMS work, the license question, and how the code was written
 - [deploy/demo/README.md](deploy/demo/README.md): the multi-process demo
 
 ## Credits
