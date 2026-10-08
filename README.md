@@ -1,14 +1,21 @@
-# gpon-cms: a provisioning API for Calix CMS
+# gpon-cms: a provisioning API for legacy Calix GPON
 
-A REST and Kafka front end for legacy Calix GPON. What the SMx API is for the newer network, this is for CMS: a billing system or portal makes one call when a customer signs up, and the configuration is pushed to the ONT through the CMS northbound interface (R15.x, SOAP over HTTP). No screen-scraping and nobody typing into CMS.
+A REST and Kafka front end for legacy Calix GPON (E7 EXA, managed by CMS). What the SMx API is for the newer network, this is for the old one: a billing system or portal makes one call when a customer signs up, and the configuration is pushed to the ONT. No screen-scraping and nobody typing into CMS.
+
+**Two ways to reach the network; the API is the same either way:**
+
+1. **Through the CMS northbound interface (NBI), if your CMS has it.** This is the preferred path: CMS stays the system of record. The NBI is a separately licensed part of CMS (R15.x, SOAP over HTTP or HTTPS). Set `CMS_HOST`.
+2. **Straight to each E7's command line, if it does not.** Without an NBI licence there is no API on CMS to call, so the configuration is sent over SSH to each E7 EXA node's own CLI, using Calix's documented commands. Set `E7_NODES`. See [docs/E7_CLI.md](docs/E7_CLI.md).
+
+The path is chosen once, at startup: whichever of `CMS_HOST` and `E7_NODES` is set. If both are set, pick one with `python main.py --backend cms` or `--backend e7-cli` (or `NBI_BACKEND`). It is not a per-request fallback: if the NBI is down, jobs wait and retry rather than switching to the CLI. Billing, routes, jobs, retries and safety checks do not change between the two.
 
 It also covers the rest of an ONT's life (suspend, restore, change, disconnect) and takes the retyping out of a cutover to SMx: it exports what CMS holds for a PON in SMx's terms and plans the SMx requests as a dry run.
 
-> **Status: tested against a simulated CMS only.** Nothing here has run against a real CMS or SMx, or a production Kafka cluster. Start with [HANDOFF.md](HANDOFF.md) for what is proven, what is not, and the first three things to do with a real CMS.
+> **Status: tested against a simulated CMS and a mock E7 only.** Nothing here has run against a real CMS, E7 or SMx, or a production Kafka cluster. Start with [HANDOFF.md](HANDOFF.md) for what is proven, what is not, and the first three things to do with a real CMS; [docs/E7_CLI.md](docs/E7_CLI.md) has the same for an E7.
 
 ## What it does
 
-- **Provisions an ONT piece by piece.** CMS has no single "set up this customer" command and its API cannot apply a port template, so the ONT, each Ethernet port and each service are sent as separate requests, in order. If CMS rejects a step, the ONT created in that run is removed again.
+- **Provisions an ONT piece by piece.** CMS has no single "set up this customer" command and its API cannot apply a port template, so the ONT, each Ethernet port and each service are sent as separate requests, in order. If CMS (or the E7) rejects a step, the ONT created in that run is removed again.
 - **Runs the lifecycle as jobs that are safe to repeat.** Enable or disable a port or a service, change a service's bandwidth profile, tag action, VLAN or peak-rate overrides, delete a service, delete an ONT. Each change answers `202` with a job you can poll or follow live.
 - **Handles ONTs with a built-in router, such as the 844G.** Each Ethernet port is either a plain bridge or belongs to the router. The mode is read from CMS for every port and never assumed from the ONT model.
 - **Exports for cutovers.** One PON port, one card or a whole network, as CSV and JSON laid out for SMx, with the existing serial numbers carried over and blank columns for what only the new side knows. Router-capable ONTs running as bridges are flagged. **Voice is not exported** (see below): every ONT with voice ports is marked `voice: not checked`.
