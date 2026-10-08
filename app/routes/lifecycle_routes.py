@@ -18,6 +18,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Path, Query, Request
 
+from app import audit
 from app.controller.job_controller import JobStore
 from app.controller.provisioning_controller import check_bandwidth_profiles
 from app.dependencies import get_gateway, get_jobs
@@ -47,7 +48,8 @@ async def _queue(jobs: JobStore, http_request: Request, network: str, ont_id: in
         action=ACTION_CHANGE_ONT, lane=LANE_PROVISIONING,
         key=network,  # one network's changes run in order, one at a time
         kind=CHANGE_KINDS[change.op], summary=describe(change, network, ont_id),
-        payload={"network": network, "ont_id": ont_id, "change": change.model_dump(mode="json")})
+        payload={"network": network, "ont_id": ont_id, "change": change.model_dump(mode="json")},
+        requested_by=audit.caller(http_request))
     logger.info(f"Queueing {command.summary} as job {command.id}")
     return accepted(await jobs.submit(command), http_request)
 

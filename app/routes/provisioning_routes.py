@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Path, Request
 from typing import Any, Dict, List
 import logging
 
+from app import audit
 from app.controller.job_controller import JobStore
 from app.controller.provisioning_controller import check_bandwidth_profiles, check_ont_status
 from app.dependencies import get_gateway, get_jobs
@@ -84,6 +85,7 @@ async def activate(request: ActivationRequest, http_request: Request, network: s
         key=network,  # one network's commands run in order, one at a time
         kind="activation",
         summary=f"Activate ONT {request.serial_number} on {network}",
-        payload={"network": network, "request": request.model_dump()})
+        payload={"network": network, "request": request.model_dump()},
+        requested_by=audit.caller(http_request))
     logger.info(f"Queueing {command.summary} as job {command.id}")
     return accepted(await jobs.submit(command), http_request)

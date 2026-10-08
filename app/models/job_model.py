@@ -42,6 +42,7 @@ class Command(BaseModel):
     summary: str
     payload: Dict[str, Any]
     created_at: datetime = Field(default_factory=_now)
+    requested_by: Optional[str] = Field(None, description="Who asked for it: the API key's name (see app/audit.py)")
 
 
 class JobUpdate(BaseModel):
@@ -57,6 +58,7 @@ class JobUpdate(BaseModel):
     result: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
     timestamp: datetime = Field(default_factory=_now)
+    requested_by: Optional[str] = None
 
 
 class JobEvent(BaseModel):
@@ -73,6 +75,8 @@ class Job(BaseModel):
     kind: str = Field(..., description="activation, signup, cutover, port-change, ...")
     summary: str
     status: JobStatus = JobStatus.QUEUED
+    requested_by: Optional[str] = Field(
+        None, description="Who asked for it: the API key's name, or what a topic producer called itself")
     created_at: datetime
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None

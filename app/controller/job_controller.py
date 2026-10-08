@@ -14,6 +14,7 @@ import logging
 from collections import OrderedDict
 from typing import AsyncIterator, List, Optional, Set
 
+from app import audit
 from app.messaging.bus import BusUnavailableError, MessageBus
 from app.models.job_model import Command, Job, JobEvent, JobStatus, JobUpdate
 
@@ -61,7 +62,7 @@ class JobStore:
         """
         queued = JobUpdate(job_id=command.id, kind=command.kind, summary=command.summary,
                            type="status", message="Queued", status=JobStatus.QUEUED,
-                           timestamp=command.created_at)
+                           timestamp=command.created_at, requested_by=command.requested_by)
         self.apply(queued)  # visible on this API process straight away
         try:
             await self._bus.publish_update(queued)  # ...and on the others
@@ -76,6 +77,7 @@ class JobStore:
             except BusUnavailableError:
                 pass
             raise
+        audit.record("accepted", command)
         return self.get(command.id)
 
     def apply(self, update: JobUpdate) -> None:
@@ -91,6 +93,8 @@ class JobStore:
         record.seen.add(update.id)
 
         job = record.job
+        if update.requested_by and not job.requested_by:
+            job.requested_by = update.requested_by
         if update.status is not None:
             job.status = update.status
             if update.status == JobStatus.RUNNING:

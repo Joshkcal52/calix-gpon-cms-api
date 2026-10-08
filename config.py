@@ -100,6 +100,7 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+    audit_log_path: Optional[str] = None  # also append the audit trail (app/audit.py) to this file, as JSON lines
 
     def cms_verify(self) -> Union[bool, str]:
         """What the CMS client checks the server's certificate against: a CA file, the system's CAs, or nothing"""

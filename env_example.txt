@@ -13,6 +13,8 @@ RELOAD=false
 
 # Logging
 LOG_LEVEL=INFO
+# Who asked for each change is logged on "gpon_cms.audit" as JSON lines; set this to also append them to a file
+# AUDIT_LOG_PATH=/var/log/gpon-cms/audit.jsonl
 
 # --- Queue and workers (see docs/ARCHITECTURE.md) ---
 # Leave empty to queue inside the API process. Set to use Kafka.

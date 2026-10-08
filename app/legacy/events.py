@@ -12,6 +12,7 @@ network's events stay in order.
 import json
 
 from app.legacy.models import GponSignupEvent, LegacyGponEventAdapter, XgsCutoverEvent
+from app.audit import TOPIC_UNNAMED
 from app.models.job_model import Command
 
 LANE_LEGACY = "legacy"
@@ -30,7 +31,7 @@ def event_to_command(event) -> Command:
         raise TypeError(f"Not a legacy GPON event: {type(event).__name__}")
     return Command(id=event.event_id, action=event.type, lane=LANE_LEGACY, key=event.network,
                    kind=kind, summary=summary, payload=event.model_dump(mode="json"),
-                   created_at=event.occurred_at)
+                   created_at=event.occurred_at, requested_by=event.requested_by or TOPIC_UNNAMED)
 
 
 def encode(command: Command) -> bytes:

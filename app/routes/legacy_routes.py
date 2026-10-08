@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Optional
 import logging
 
+from app import audit
 from app.controller.job_controller import JobStore
 from app.controller.provisioning_controller import check_bandwidth_profiles
 from app.dependencies import get_jobs
@@ -71,7 +72,8 @@ async def signup(request: SignupRequest, http_request: Request, network: str = N
     against the serial number and applies it when the ONT is first seen.
     """
     check_bandwidth_profiles((s.bandwidth_profile for s in request.services), settings.known_bandwidth_profiles())
-    event = GponSignupEvent(event_id=new_id(), network=network, **request.model_dump())
+    event = GponSignupEvent(event_id=new_id(), network=network, requested_by=audit.caller(http_request),
+                            **request.model_dump())
     logger.info(f"Queueing signup of subscriber {event.subscriber_id} on {network} as job {event.event_id}")
     return accepted(await jobs.submit(event_to_command(event)), http_request)
 
@@ -86,6 +88,7 @@ async def cutover(request: CutoverRequest, http_request: Request, network: str =
     and publishes a migration request for the XGS side. CMS is not changed:
     the legacy ONT stays in service until someone retires it.
     """
-    event = XgsCutoverEvent(event_id=new_id(), network=network, **request.model_dump())
+    event = XgsCutoverEvent(event_id=new_id(), network=network, requested_by=audit.caller(http_request),
+                            **request.model_dump())
     logger.info(f"Queueing cutover of subscriber {event.subscriber_id} on {network} as job {event.event_id}")
     return accepted(await jobs.submit(event_to_command(event)), http_request)
