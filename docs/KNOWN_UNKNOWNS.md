@@ -39,7 +39,7 @@ The risk: CMS's "force" delete removes an ONT with everything on it, and this AP
 - An ONT that still has data services is refused unless `force=true`. With it, the data services are deleted one by one, then the ONT is deleted **without** CMS's force, so CMS should refuse it while anything is left (a voice service, or a service added since the read).
 - Nothing uses CMS's force on an ONT delete: a rollback also deletes the services its activation added, then the ONT without force.
 
-**Inferred, not verified:** that CMS refuses a delete without force while services are left, and accepts one when nothing is left. If it insists on force even for an empty ONT, the API's delete and an activation's rollback fail (safely, leaving the ONT and saying so) and `app/controller/lifecycle_controller.py` and `_roll_back` in `app/controller/provisioning_controller.py` must change. `lab_cycle` checks exactly this on a spare ONT. Also see "an empty read" above.
+**Inferred, not verified:** that CMS refuses a delete without force while services are left, and accepts one when nothing is left. If it insists on force even for an empty ONT, the API's delete and an activation's rollback fail (safely, leaving the ONT and saying so) and `app/controller/lifecycle_controller.py` and `_roll_back` in `app/controller/provisioning_controller.py` must change. The other direction matters more: if CMS removes the services with the ONT even without force, neither the voice protection nor the rollback's protection of another run's services works, and nothing fails to say so. `lab_cycle` checks both directions on a spare ONT (steps 6 and 7). Also see "an empty read" above.
 
 ## The E7 command-line path
 
