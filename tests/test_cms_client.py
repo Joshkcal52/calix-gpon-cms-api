@@ -95,6 +95,14 @@ def canonical(body: str) -> str:
     return ElementTree.canonicalize(ElementTree.tostring(root, encoding="unicode"))
 
 
+def as_this_project_sends(recorded: str) -> str:
+    """
+    The library's request with this project's one deliberate difference: <serno> in lowercase
+    (app/nbi/serno.py). The fixture keeps what the library sent.
+    """
+    return re.sub(r"<serno>([^<]*)</serno>", lambda m: f"<serno>{m.group(1).lower()}</serno>", recorded)
+
+
 def test_every_operation_sends_the_requests_cms_nbi_client_sent(wire):
     port, log = wire
 
@@ -148,7 +156,7 @@ def test_every_operation_sends_the_requests_cms_nbi_client_sent(wire):
             assert len(sent) == len(recorded["requests"]), recorded["step"]
             for ours, theirs in zip(sent, recorded["requests"]):
                 assert ours["path"] == theirs["path"] and ours["headers"] == theirs["headers"], recorded["step"]
-                assert canonical(ours["body"]) == theirs["body"], recorded["step"]
+                assert canonical(ours["body"]) == as_this_project_sends(theirs["body"]), recorded["step"]
 
     asyncio.run(scenario())
 

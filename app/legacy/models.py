@@ -21,8 +21,8 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from app.models.provisioning_model import (
-    EthernetPortConfig, EthernetService, NetworkName, OntId, OntState, ProfileName, ProvisionedService,
-    SerialNumber, SubscriberId, check_unique_ports, check_unique_services
+    ONT_DESCRIPTION_MAX, EthernetPortConfig, EthernetService, NetworkName, OntId, OntState, ProfileName,
+    ProvisionedService, SerialNumber, SubscriberId, check_unique_ports, check_unique_services
 )
 
 EventId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{8,64}$",
@@ -53,7 +53,7 @@ class GponSignupEvent(_EventBase):
     serial_number: SerialNumber
     ont_id: Optional[OntId] = Field(None, description="Leave empty to take the next free ID")
     profile: ProfileName = Field(..., description="ONT profile")
-    description: Optional[str] = Field(None, max_length=64)
+    description: Optional[str] = Field(None, max_length=ONT_DESCRIPTION_MAX)
     services: List[EthernetService] = Field(..., min_length=1, max_length=8)
     ports: List[EthernetPortConfig] = Field(
         default_factory=list, max_length=8,

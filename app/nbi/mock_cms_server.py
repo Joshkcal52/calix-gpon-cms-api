@@ -15,6 +15,13 @@ library, which this project used to depend on. Fields the library never
 looked at (op-stat, linked-pon, model, the error tags) are educated guesses.
 Nothing here has been compared with a real CMS.
 
+  - show-ont answers each ONT as two objects in one <match>, as CMS NBI
+    documentation describes: the provisioning (admin, ontprof,
+    serno, subscr-id, descr, linked-pon) under <get-config>, the state
+    (op-stat, alarm counts, model, vendor) under <get>. Create, merge and
+    get-config replies carry only the provisioning. Serial numbers are
+    lowercase hexadecimal.
+
   - OntEthGe (Ethernet port) replies reuse the element names of the library's
     write request (admin, subscr-id, descr, sec/EthSecProf). That a read
     answers with the same names is inferred.
@@ -149,17 +156,28 @@ def _pon_xml(tag: str, pon_port: Optional[str]) -> str:
 
 
 def _ont_xml(ont: OntState) -> str:
-    online = ont.oper_state == OperState.ONLINE
+    """
+    An Ont as get-config, create and merge replies carry it: its provisioning only, with no
+    op-stat, model or vendor; show-ont adds those separately (see _ont_state_xml).
+    """
     return (
         f"<type>Ont</type><id><ont>{ont.ont_id}</ont></id>"
         f"<admin>{escape(ont.admin_state)}</admin>"
+        f"<ontprof><type>OntProf</type><id><ontprof>{escape(ont.profile or '')}</ontprof></id></ontprof>"
         f"<serno>{to_serno(ont.serial_number)}</serno><reg-id></reg-id>"
         f"<subscr-id>{escape(ont.subscriber_id or '')}</subscr-id>"
         f"<descr>{escape(ont.description or '')}</descr>"
-        f"<ontprof><type>OntProf</type><id><ontprof>{escape(ont.profile or '')}</ontprof></id></ontprof>"
-        f"<op-stat>{'enable' if online else 'sys-disable'}</op-stat>"
-        f"<model>{escape(ont.model or '')}</model><vendor>{VENDOR}</vendor>"
         f"{_pon_xml('linked-pon', ont.pon_port)}")
+
+
+def _ont_state_xml(ont: OntState) -> str:
+    """The state half of a show-ont match"""
+    online = ont.oper_state == OperState.ONLINE
+    return (
+        f"<type>Ont</type><id><ont>{ont.ont_id}</ont></id>"
+        f"<op-stat>{'enable' if online else 'sys-disable'}</op-stat>"
+        f"<crit>0</crit><maj>0</maj><min>0</min><warn>0</warn><info>0</info>"
+        f"<model>{escape(ont.model or '')}</model><vendor>{VENDOR}</vendor>")
 
 
 def _slot(attachment: Attachment) -> str:
@@ -318,13 +336,16 @@ async def _handle_action(network: str, action: ElementTree.Element) -> str:
 
     matches = [o for o in onts
                if (not ont_id or str(o.ont_id) == ont_id)
-               and (not serno or to_serno(o.serial_number) == serno.upper())
+               and (not serno or to_serno(o.serial_number) == serno.lower())
                and (not subscriber or o.subscriber_id == subscriber)
                and (not admin or o.admin_state == admin)
                and (not pon_port or o.pon_port == pon_port)]
     if not matches:
         return "<action-reply/>"
-    page = _page([f"<match><get><object>{_ont_xml(o)}</object></get></match>"
+    # Each match carries the ONT twice, as CMS NBI documentation describes: its provisioning
+    # (serial, subscriber, profile, PON port) under get-config, its state (op-stat, model) under get
+    page = _page([f"<match><get-config><object>{_ont_xml(o)}</object></get-config>"
+                  f"<get><object>{_ont_state_xml(o)}</object></get></match>"
                   for o in sorted(matches, key=lambda o: o.ont_id)], args, "./get/object/id")
     return f"<action-reply>{page}</action-reply>"
 
@@ -371,7 +392,7 @@ async def _handle_get(network: str, rpc: ElementTree.Element) -> str:
         return f"<data><top><object><type>System</type><id/><children>{children}</children></object></top></data>"
 
     if object_type == "DiscOnt":
-        serno = _text(target, "./id/discont").upper()
+        serno = _text(target, "./id/discont").lower()
         for ont in await cms.list_discovered_onts(network):
             if to_serno(ont.serial_number) == serno:
                 return f"<data><top><object>{_discovered_xml(ont)}</object></top></data>"

@@ -35,6 +35,13 @@ LOG_LEVEL=INFO
 # CMS_VERIFY_TLS=true
 # CMS_USERNAME=nbi
 # CMS_PASSWORD=your_password_here
+# Router side (RG) of ONTs such as the 844G. Off until set; see app/nbi/router_side.py.
+# Suggested by CMS NBI documentation for an earlier release. Set them only after
+# python -m app.tools.cms_check against a real 844G agrees.
+# CMS_RG_SERVICE_SLOT=8
+# CMS_RG_PORT_TYPE=OntRg
+# CMS_RG_PORT_ID_ELEMENT=ontrg
+# CMS_RG_PORT_MODE_ELEMENT=intf
 # Topic the worker reads signup and cutover events from
 # LEGACY_EVENTS_TOPIC=legacy-gpon-events
 # Topic cutovers publish migration requests to (your XGS/SMx topic, once the schema matches)

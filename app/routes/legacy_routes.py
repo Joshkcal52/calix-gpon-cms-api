@@ -20,8 +20,8 @@ from app.legacy.events import event_to_command
 from app.legacy.models import GponSignupEvent, XgsCutoverEvent
 from app.models.job_model import JobAccepted, new_id
 from app.models.provisioning_model import (
-    EthernetPortConfig, EthernetService, NETWORK_PATTERN, OntId, ProfileName, SerialNumber, SubscriberId,
-    check_unique_ports, check_unique_services
+    ONT_DESCRIPTION_MAX, EthernetPortConfig, EthernetService, NETWORK_PATTERN, OntId, ProfileName, SerialNumber,
+    SubscriberId, check_unique_ports, check_unique_services
 )
 from app.routes.job_routes import accepted
 
@@ -39,7 +39,7 @@ class SignupRequest(BaseModel):
     serial_number: SerialNumber
     ont_id: Optional[OntId] = Field(None, description="Leave empty to take the next free ID")
     profile: ProfileName = Field(..., description="ONT profile")
-    description: Optional[str] = Field(None, max_length=64)
+    description: Optional[str] = Field(None, max_length=ONT_DESCRIPTION_MAX)
     services: List[EthernetService] = Field(..., min_length=1, max_length=8)
     ports: List[EthernetPortConfig] = Field(
         default_factory=list, max_length=8,
