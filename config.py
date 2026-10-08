@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # (app/nbi/mock_e7.py) that python main.py starts itself. For development without CMS or E7 access.
     # Set MOCK_MODE=true in .env, or python main.py --mock
     mock_mode: bool = False
+    # Mock mode only: fill one PON of the simulated CMS (1/1/3) or the mock E7 (1/1/1) with this many
+    # discovered ONTs (up to 64), for trying the API at scale. See app/nbi/mock_pon.py. 0: the usual small network
+    mock_pon_size: int = 0
 
     # --- CMS northbound interface (the fast lane) ---
     # The real CMS, reached through app/nbi/client.py. Ignored when MOCK_MODE is on.

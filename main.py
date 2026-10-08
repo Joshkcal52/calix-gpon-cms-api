@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI):
     app.state.gateway = gateway
     app.state.jobs = jobs
     app.state.worker = None
+    app.state.mock_e7 = mock_e7_server.e7 if mock_e7_server is not None else None  # for tools/sim_signups.py
 
     worker_task = None
     if settings.run_embedded_worker():
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
     await gateway.close()
     if mock_e7_server is not None:
         mock_e7_server.close()
+    await bus.stop()
 
 
 async def start_mock_e7_if_needed(settings):
@@ -91,12 +93,12 @@ async def start_mock_e7_if_needed(settings):
     if not (settings.mock_mode and settings.nbi_backend == "e7-cli" and not settings.e7_nodes):
         return settings, None
     from app.nbi import mock_e7
-    server, port, _ = await mock_e7.serve(0)
+    server, port, e7 = await mock_e7.serve(0, e7=mock_e7.MockE7(pon_size=settings.mock_pon_size))
+    server.e7 = e7
     logger.info(f"Mock E7 {mock_e7.NODE} listening on 127.0.0.1:{port}")
     return settings.model_copy(update={
         "e7_nodes": f"{mock_e7.NODE}=127.0.0.1:{port}", "e7_username": "e7", "e7_password": "e7",
         "e7_known_hosts": "none"}), server
-    await bus.stop()
 
 
 # Create FastAPI application instance
@@ -224,6 +226,8 @@ if __name__ == "__main__":
                         help="provision through the CMS NBI (cms) or each E7's CLI (e7-cli); overrides NBI_BACKEND")
     parser.add_argument("--mock", action="store_true",
                         help="use the simulated CMS, or with --backend e7-cli a mock E7; same as MOCK_MODE=true")
+    parser.add_argument("--pon-size", type=int,
+                        help="with --mock, fill one simulated PON with this many ONTs (up to 64); same as MOCK_PON_SIZE")
     args = parser.parse_args()
     # Set on the shared settings object (uvicorn imports main again in this process) and in the
     # environment (for the fresh process RELOAD=true starts)
@@ -233,6 +237,9 @@ if __name__ == "__main__":
     if args.mock:
         settings.mock_mode = True
         os.environ["MOCK_MODE"] = "true"
+    if args.pon_size is not None:
+        settings.mock_pon_size = args.pon_size
+        os.environ["MOCK_PON_SIZE"] = str(args.pon_size)
     uvicorn.run(
         "main:app",
         host=settings.host,

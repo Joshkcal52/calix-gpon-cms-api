@@ -279,7 +279,7 @@ def build_gateway(settings: Any) -> NbiGateway:
     choice = backend_choice(settings)
     if choice == "cms" and settings.mock_mode:
         from app.nbi.mock_cms import MockCmsBackend
-        backend: NbiBackend = MockCmsBackend()
+        backend: NbiBackend = MockCmsBackend(pon_size=getattr(settings, "mock_pon_size", 0))
         logger.warning("MOCK_MODE is on: CMS calls go to a simulated CMS, not a real one")
     elif choice == "e7-cli":
         if not getattr(settings, "e7_nodes", None):

@@ -13,14 +13,16 @@ the backend and the mock agree, not that a real E7 prints this. Replace the
 layouts with captures from a real E7 (python -m app.tools.e7_capture).
 
 Run it on its own to point the API at it:
-    python -m app.nbi.mock_e7 --port 2222
+    python -m app.nbi.mock_e7 --port 2222 [--pon-size 64]
     E7_NODES=E7-MOCK=127.0.0.1:2222 E7_USERNAME=e7 E7_PASSWORD=e7 E7_KNOWN_HOSTS=none python main.py
 """
 
 import argparse
 import asyncio
 import shlex
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
+from app.nbi.mock_pon import EXTRA_BW_PROFILES, EXTRA_VLANS, check_pon_size, sim_onts
 
 NODE = "E7-MOCK"
 PROMPT = f"{NODE}>"
@@ -36,7 +38,8 @@ SERVICE_NAMES = tuple(f"Data{n}" for n in range(1, 9))
 
 
 class MockE7:
-    def __init__(self) -> None:
+    def __init__(self, pon_size: int = 0) -> None:
+        """pon_size: fill PON 1/1/1 with that many ONTs in all (1:32 or 1:64), the rest discovered and unprovisioned"""
         self.onts: Dict[int, Dict[str, str]] = {}
         self.services: Dict[int, List[Dict[str, str]]] = {}
         self.ports: Dict[Tuple[int, str], Dict[str, str]] = {}
@@ -46,10 +49,37 @@ class MockE7:
         self.commands: List[str] = []
         self.idle_timeout: Optional[float] = None  # seconds before an idle session is closed, as a real E7 can
         self.hang_up_on: Optional[str] = None  # a command start: the session closes on it, unanswered
+        self.hang_up_once = False  # clear hang_up_on after the first hang-up
+        self.hang_up_after_run = False  # run the command first, then hang up without answering
+        self.latency = 0.0  # seconds before each answer, to stand in for a real E7's response time
+        self.idle_closes = 0  # sessions closed by close_idle_sessions()
+        self._idle: Set[asyncio.Event] = set()  # one per session waiting for a command; set it to close the session
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self.vlans = dict(VLANS)
+        self.bw_profiles = BW_PROFILES
         self.logins = 0
         self._create(101, "812G-1", "00B2C201", "SUB-1001", "Smith residence")
         self.services[101] = [{"port": "g1", "name": "Data1", "bw": "RES-1G", "ta": "ADD-OUTER", "outer": "100",
                                "inner": "none", "admin": "enabled", "desc": ""}]
+        if check_pon_size(pon_size):
+            on_pon = sum(pon == "1/1/1" for _, pon in self.present.values())
+            for serial, profile in sim_onts(max(0, pon_size - on_pon)):
+                self.present[serial] = (PROFILES[profile][0], "1/1/1")
+            self.vlans.update(EXTRA_VLANS)
+            self.bw_profiles = BW_PROFILES + EXTRA_BW_PROFILES
+
+    def close_idle_sessions(self) -> None:
+        """
+        Close every session that is waiting for its next command, as an E7 does when its inactivity
+        timeout runs out. Safe to call from another thread.
+        """
+        def close() -> None:
+            for closer in list(self._idle):
+                if not closer.is_set():
+                    closer.set()
+                    self.idle_closes += 1
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(close)
 
     # --- Dispatch ------------------------------------------------------------------
 
@@ -99,7 +129,7 @@ class MockE7:
                           [[n, m] + [counts[n].get(x, "0") for x in letters] + [c or "-"]
                            for n, (m, _, c) in PROFILES.items()])
         if w[:2] == ["show", "vlan"] and len(w) == 2:
-            return _table(["VLAN", "Name"], [[str(v), n] for v, n in VLANS.items()])
+            return _table(["VLAN", "Name"], [[str(v), n] for v, n in self.vlans.items()])
         if w[:2] == ["create", "ont"] and len(w) >= 3:
             return self._create_cmd(w[2], _options(w[3:]))
         if w[:2] == ["set", "ont"] and len(w) >= 3:
@@ -121,6 +151,8 @@ class MockE7:
                 raise _Refused(f"ONT {ont} has services; remove them first or use forced.")
             del self.onts[ont]
             self.services.pop(ont, None)
+            for key in [k for k in self.ports if k[0] == ont]:
+                del self.ports[key]  # a new ONT under the same ID starts with default ports
             return ""
         if w[:2] == ["add", "eth-svc"] and len(w) >= 5 and w[3] == "to-ont-port":
             return self._add_service(w[2], w[4], _options(w[5:]))
@@ -215,11 +247,11 @@ class MockE7:
             raise _Refused(f"{key} is limited to {most} characters.")
 
     def _check(self, field: str, val: str) -> None:
-        if field == "bw" and val not in BW_PROFILES:
+        if field == "bw" and val not in self.bw_profiles:
             raise _Refused(f"Bandwidth profile {val} does not exist.")
         if field == "ta" and val not in TAG_ACTIONS:
             raise _Refused(f"Service tag action {val} does not exist.")
-        if field == "outer" and (not val.isdigit() or int(val) not in VLANS):
+        if field == "outer" and (not val.isdigit() or int(val) not in self.vlans):
             raise _Refused(f"VLAN {val} does not exist.")
 
     # --- Views -----------------------------------------------------------------------
@@ -303,23 +335,39 @@ async def serve(port: int = 0, *, username: str = "e7", password: str = "e7",
 
     async def shell(process: "asyncssh.SSHServerProcess") -> None:
         e7.logins += 1
+        e7._loop = asyncio.get_running_loop()
         process.stdout.write(f"Calix E7 (mock)\n{PROMPT}")
         try:
             while True:
+                # Wait for a command; give up on the idle timeout or when close_idle_sessions() is called
+                closer = asyncio.Event()
+                reader = asyncio.ensure_future(process.stdin.readline())
+                closed = asyncio.ensure_future(closer.wait())
+                e7._idle.add(closer)
                 try:
-                    line = await asyncio.wait_for(process.stdin.readline(), e7.idle_timeout)
-                except asyncio.TimeoutError:
+                    await asyncio.wait({reader, closed}, timeout=e7.idle_timeout,
+                                       return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    e7._idle.discard(closer)
+                    closed.cancel()
+                if not reader.done():
+                    reader.cancel()
                     process.stdout.write("\nSession timed out.\n")
                     break
+                line = reader.result()
                 if not line:
                     break
                 command = line.strip()
                 if command in ("exit", "logout", "quit"):
                     break
                 if e7.hang_up_on and command.startswith(e7.hang_up_on):
-                    e7.commands.append(command)
+                    e7.run(command) if e7.hang_up_after_run else e7.commands.append(command)
+                    if e7.hang_up_once:
+                        e7.hang_up_on = None
                     break
                 output = e7.run(command) if command else ""
+                if e7.latency:
+                    await asyncio.sleep(e7.latency)
                 process.stdout.write((output + "\n" if output else "") + PROMPT)
         except (asyncssh.BreakReceived, asyncssh.TerminalSizeChanged, ConnectionError):
             pass
@@ -333,10 +381,11 @@ async def serve(port: int = 0, *, username: str = "e7", password: str = "e7",
 def main() -> None:  # pragma: no cover - manual use
     parser = argparse.ArgumentParser(description="Mock E7 EXA command line over SSH (invented output)")
     parser.add_argument("--port", type=int, default=2222)
+    parser.add_argument("--pon-size", type=int, default=0, help="fill PON 1/1/1 with this many ONTs (up to 64)")
     args = parser.parse_args()
 
     async def run() -> None:
-        _, port, _ = await serve(args.port)
+        _, port, _ = await serve(args.port, e7=MockE7(pon_size=args.pon_size))
         print(f"Mock E7 listening on 127.0.0.1:{port} (user e7, password e7)")
         await asyncio.Event().wait()
 

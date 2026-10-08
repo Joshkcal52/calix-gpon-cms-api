@@ -3,7 +3,8 @@ Mock CMS
 An in-memory stand-in for the Calix CMS northbound interface, used when
 MOCK_MODE=true. It models one network of fourteen ONTs on two PONs
 (MOCK_ONTS below), plus three ONTs that have been discovered on a PON but
-not provisioned yet.
+not provisioned yet. MockCmsBackend(pon_size=64) (or MOCK_PON_SIZE) also puts
+that many discovered ONTs on the empty PON 1/1/3 (see app/nbi/mock_pon.py).
 
 It checks the things a real CMS would refuse (duplicate ONT IDs, serial
 numbers already in use, VLANs and bandwidth profiles that do not exist, a missing or unwanted outer
@@ -25,6 +26,7 @@ from app.models.provisioning_model import (
 from app.nbi.errors import (
     NbiConflictError, NbiConnectionError, NbiNotFoundError, NbiRejectedError
 )
+from app.nbi.mock_pon import EXTRA_BW_PROFILES, EXTRA_VLANS, check_pon_size, sim_onts
 
 MOCK_NETWORK = "NTWK-MOCK-E7"
 MOCK_VLANS = {100: "data", 200: "voice", 300: "video"}
@@ -46,6 +48,7 @@ MOCK_BANDWIDTH_PROFILES = ("RES-1G", "VOICE")  # invented names; on a real CMS t
 # are: that is set up on each CMS. The simulation has two tag actions that take no outer VLAN, with
 # obviously fake names. Every other tag action (or none) needs one, and these two refuse one.
 MOCK_TAG_ACTIONS_NO_VLAN = ("MOCK-NO-VLAN-A", "MOCK-NO-VLAN-B")
+MOCK_SIM_PON = "1/1/3"  # empty in the default network; pon_size fills it
 
 
 class MockOnt(NamedTuple):
@@ -99,7 +102,7 @@ class MockCmsBackend:
     name = "mock-cms"
 
     def __init__(self, latency: float = 0.05, ranging_seconds: float = 1.5,
-                 clock: Callable[[], float] = time.monotonic, extra_onts: int = 0):
+                 clock: Callable[[], float] = time.monotonic, extra_onts: int = 0, pon_size: int = 0):
         self.latency = latency  # seconds each call takes
         self.ranging_seconds = ranging_seconds  # how long a new ONT takes to come online
         self.outage: Optional[str] = None  # None, "timeout" or "refused"
@@ -107,6 +110,8 @@ class MockCmsBackend:
         self._clock = clock
         self._onts: Dict[int, _MockOnt] = {}
         self._discovered: Dict[str, DiscoveredOnt] = {}
+        self.vlans = dict(MOCK_VLANS)
+        self.bandwidth_profiles = MOCK_BANDWIDTH_PROFILES
 
         for ont in MOCK_ONTS:
             # Everyone has data; every third subscriber also has voice on port 2
@@ -138,6 +143,14 @@ class MockCmsBackend:
                                    ("CXNK00C4D302", "716GE-I", "1/1/2"),
                                    ("CXNK00C4D303", "812G-1", "1/1/2")):
             self._discovered[serial] = DiscoveredOnt(serial_number=serial, model=model, pon_port=pon)
+
+        # Optional: a PON of discovered ONTs, for provisioning at scale (app/nbi/mock_pon.py)
+        if check_pon_size(pon_size):
+            for serial, profile in sim_onts(pon_size):
+                self._discovered[f"CXNK{serial}"] = DiscoveredOnt(
+                    serial_number=f"CXNK{serial}", model=profile, pon_port=MOCK_SIM_PON)
+            self.vlans.update(EXTRA_VLANS)
+            self.bandwidth_profiles = MOCK_BANDWIDTH_PROFILES + EXTRA_BW_PROFILES
 
     # --- NbiBackend operations ------------------------------------------
 
@@ -266,7 +279,7 @@ class MockCmsBackend:
 
     async def list_vlans(self, network: str) -> List[Vlan]:
         await self._exchange(network)
-        return [Vlan(id=vlan, name=name) for vlan, name in MOCK_VLANS.items()]
+        return [Vlan(id=vlan, name=name) for vlan, name in self.vlans.items()]
 
     # --- Extra operations used by the mock NBI server (app/nbi/mock_cms_server.py) ---
 
@@ -376,15 +389,13 @@ class MockCmsBackend:
                 return position
         return None
 
-    @staticmethod
-    def _check_vlan(network: str, vlan: int) -> None:
-        if vlan not in MOCK_VLANS:
+    def _check_vlan(self, network: str, vlan: int) -> None:
+        if vlan not in self.vlans:
             raise NbiRejectedError(
                 f"VLAN {vlan} does not exist on {network}. "
-                f"Available VLANs: {', '.join(str(v) for v in MOCK_VLANS)}.")
+                f"Available VLANs: {', '.join(str(v) for v in self.vlans)}.")
 
-    @classmethod
-    def _check_tag_vlan(cls, network: str, tag_action: Optional[str], vlan: Optional[int]) -> None:
+    def _check_tag_vlan(self, network: str, tag_action: Optional[str], vlan: Optional[int]) -> None:
         """The simulation's rule for which tag actions take an outer VLAN (MOCK_TAG_ACTIONS_NO_VLAN)"""
         if tag_action in MOCK_TAG_ACTIONS_NO_VLAN:
             if vlan is not None:
@@ -393,14 +404,13 @@ class MockCmsBackend:
         if vlan is None:
             raise NbiRejectedError(f"Tag action {tag_action or '(none)'} needs an outer VLAN, and none was given. "
                                    f"In the simulated CMS only tag actions {' and '.join(MOCK_TAG_ACTIONS_NO_VLAN)} take none.")
-        cls._check_vlan(network, vlan)
+        self._check_vlan(network, vlan)
 
-    @staticmethod
-    def _check_bandwidth_profile(network: str, profile: Optional[str]) -> None:
-        if profile not in MOCK_BANDWIDTH_PROFILES:
+    def _check_bandwidth_profile(self, network: str, profile: Optional[str]) -> None:
+        if profile not in self.bandwidth_profiles:
             raise NbiRejectedError(
                 f"Bandwidth profile '{profile}' does not exist on {network}. "
-                f"Available bandwidth profiles: {', '.join(MOCK_BANDWIDTH_PROFILES)}.")
+                f"Available bandwidth profiles: {', '.join(self.bandwidth_profiles)}.")
 
     @staticmethod
     def _check_port(ont: _MockOnt, attachment: Attachment, number: int) -> None:

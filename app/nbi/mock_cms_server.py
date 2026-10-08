@@ -79,7 +79,8 @@ def _fresh_state() -> None:
     app.state.cms = MockCmsBackend(
         latency=float(os.getenv("MOCK_CMS_LATENCY", "0.02")),
         ranging_seconds=float(os.getenv("MOCK_CMS_RANGING_SECONDS", "1.5")),
-        extra_onts=int(os.getenv("MOCK_CMS_EXTRA_ONTS", "0")))
+        extra_onts=int(os.getenv("MOCK_CMS_EXTRA_ONTS", "0")),
+        pon_size=int(os.getenv("MOCK_PON_SIZE", "0")))
     page_size = int(os.getenv("MOCK_CMS_PAGE_SIZE", "0"))
     app.state.page_size = page_size if page_size > 0 else None  # None: never page
     app.state.sessions = set()
