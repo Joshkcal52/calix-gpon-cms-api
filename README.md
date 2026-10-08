@@ -218,6 +218,7 @@ config.py       settings
 - [HANDOFF.md](HANDOFF.md): one page on what this is, what is proven, and where to start with a real CMS
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the design, the delivery rules, and the full list of what is inferred
 - [docs/E7_CLI.md](docs/E7_CLI.md): provisioning through each E7's command line, and what is unverified
+- [docs/CUTOVER.md](docs/CUTOVER.md): what the cutover tools hand to the XGS side, and what to know before relying on them
 - [docs/SIM_RESULTS.md](docs/SIM_RESULTS.md): 32 and 64 simulated customers on both backends, with fault injection
 - [deploy/demo/README.md](deploy/demo/README.md): the multi-process demo
 
