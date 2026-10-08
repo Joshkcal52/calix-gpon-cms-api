@@ -416,7 +416,7 @@ def test_the_check_guard_refuses_writes_even_if_code_tries_one(nbi_server):
             with pytest.raises(WriteBlocked):
                 await backend.update_port(NET, 1, Attachment.ETHERNET, 1, PortChange(admin_state="disabled"))
             with pytest.raises(WriteBlocked):
-                await backend.delete_ont(NET, 1)
+                await backend.delete_ont(NET, 1, force=True)
         finally:
             remove()
         await backend.close()

@@ -19,6 +19,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Path, Query, Request
 
 from app.controller.job_controller import JobStore
+from app.controller.provisioning_controller import check_bandwidth_profiles
 from app.dependencies import get_gateway, get_jobs
 from app.models.job_model import Command, JobAccepted, LANE_PROVISIONING
 from app.models.lifecycle_model import (
@@ -29,6 +30,7 @@ from app.models.provisioning_model import (
 )
 from app.nbi.gateway import NbiGateway
 from app.routes.job_routes import accepted
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +133,7 @@ async def update_service(body: ServiceChange, http_request: Request, network: st
                          ont_id: int = OntPath, port: str = PortPath, service_index: int = ServicePath,
                          jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
     """Change a service's bandwidth profile, tag action, VLAN or admin state. Only what differs is sent."""
+    check_bandwidth_profiles([body.bandwidth_profile], settings.known_bandwidth_profiles())
     change = UpdateService(port=port, service_index=service_index, change=body)
     return await _queue(jobs, http_request, network, ont_id, change)
 
@@ -153,12 +156,20 @@ async def delete_service(http_request: Request, network: str = NetworkPath, ont_
 async def delete_ont(http_request: Request, network: str = NetworkPath, ont_id: int = OntPath,
                      serial_number: str = Query(..., pattern=r"^[A-Za-z0-9]{4,16}$",
                                                 description="The ONT's serial number, as a safety check"),
-                     force: bool = Query(False, description="Also delete its services"),
+                     force: bool = Query(False, description="Also delete its data services"),
+                     voice_checked: bool = Query(
+                         False, description="Someone has checked in CMS that it has no voice service to keep. "
+                                            "Required if its ONT profile has voice ports"),
                      jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
     """
     Delete an ONT. Refused if the ONT ID now holds a different serial number,
-    or if it still has services and force is false. Deleting one that is
-    already gone succeeds.
+    if it still has services and force is false, or if its ONT profile has
+    voice ports and voice_checked is false (this API does not read voice
+    services). Deleting one that is already gone succeeds.
+
+    With force, the data services are deleted one by one first. The ONT
+    itself is always deleted without CMS's force, so CMS refuses it if
+    anything is still on it.
     """
-    change = DeleteOnt(serial_number=serial_number, force=force)
+    change = DeleteOnt(serial_number=serial_number, force=force, voice_checked=voice_checked)
     return await _queue(jobs, http_request, network, ont_id, change)

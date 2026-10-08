@@ -127,7 +127,7 @@ def test_every_operation_sends_the_requests_cms_nbi_client_sent(wire):
             "list_ont_profiles": lambda: b.list_ont_profiles(NET),
             "list_vlans": lambda: b.list_vlans(NET),
             "delete_service": lambda: b.delete_service(NET, 15, Attachment.ETHERNET, 1, 1),
-            "delete_ont": lambda: b.delete_ont(NET, 15),
+            "delete_ont": lambda: b.delete_ont(NET, 15, force=True),
             "session re-login": lambda: b.get_ont(NET, 1),
             "network unknown": lambda: b.get_ont("NTWK-NOPE", 1),
             "close": lambda: b.close(),

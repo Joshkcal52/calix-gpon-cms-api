@@ -386,8 +386,13 @@ class CmsBackend:
         return [Vlan(id=int(_dig(obj, "id", "vlan")), name=_scalar(obj.get("name")))
                 for obj in self._audit(found, "Vlan") if (_dig(obj, "id", "vlan") or "").isdigit()]
 
-    async def delete_ont(self, network: str, ont_id: int) -> None:
-        await self.client.edit(network, "delete", f"<type>Ont</type><id>{element('ont', ont_id)}</id>", force=True)
+    async def delete_ont(self, network: str, ont_id: int, *, force: bool) -> None:
+        """
+        Delete an ONT. With force, CMS also deletes whatever is still on it, voice services
+        included, which this API cannot read. Without it, CMS is expected to refuse an ONT that
+        still has services (inferred, not confirmed against a real CMS).
+        """
+        await self.client.edit(network, "delete", f"<type>Ont</type><id>{element('ont', ont_id)}</id>", force=force)
 
     async def close(self) -> None:
         await self.client.close()

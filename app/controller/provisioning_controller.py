@@ -7,10 +7,11 @@ within the request, and the multi-step activation that a worker runs.
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional
 
 from app.models.provisioning_model import (
-    ActivationRequest, Attachment, OntSpec, OperState, PortChange, PortState, StatusCheckItem, StatusCheckResult
+    ActivationRequest, Attachment, EthernetService, OntSpec, OperState, PortChange, PortState, ProvisionedService,
+    ServiceChange, StatusCheckItem, StatusCheckResult, port_name
 )
 from app.nbi.errors import NbiConflictError, NbiError, NbiNotFoundError, NbiRejectedError
 from app.nbi.gateway import NbiGateway
@@ -41,9 +42,23 @@ async def check_ont_status(gateway: NbiGateway, network: str, ont_ids: List[int]
         results=list(results))
 
 
+def check_bandwidth_profiles(profiles: Iterable[Optional[str]], known: Optional[FrozenSet[str]]) -> None:
+    """
+    Refuse bandwidth profiles that are not in BANDWIDTH_PROFILES (known is None when it is not set).
+    Run before a job is queued and again by the worker, before anything is sent to CMS.
+    """
+    if known is None:
+        return
+    unknown = sorted({p for p in profiles if p is not None and p not in known})
+    if unknown:
+        raise NbiRejectedError(
+            f"Unknown bandwidth profile(s): {', '.join(unknown)}. Allowed (BANDWIDTH_PROFILES): "
+            f"{', '.join(sorted(known))}. Nothing was changed.")
+
+
 async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
                        request: ActivationRequest, *, verify_timeout: float,
-                       poll_seconds: float) -> Dict[str, Any]:
+                       poll_seconds: float, bandwidth_profiles: Optional[FrozenSet[str]] = None) -> Dict[str, Any]:
     """
     Activate a discovered ONT. Each step is reported as a job event.
 
@@ -53,7 +68,9 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     3. Configure each Ethernet port listed in `ports` (only what differs)
     4. Bind each service that is not bound yet, on an Ethernet port or on the
        router side. A service is identified by its side, port and VLAN, or,
-       without a VLAN, by its side, port and tag action
+       without a VLAN, by its side, port and tag action. One that is already
+       bound but differs (bandwidth profile, tag action, peak rates) is changed
+       to match the request
     5. Wait for the ONT to come online
 
     CMS applies no port template through its API, so each port setting and
@@ -72,6 +89,7 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     serial = request.serial_number
 
     await context.step(1, total_steps, f"Looking for ONT {serial} on {network}")
+    check_bandwidth_profiles((s.bandwidth_profile for s in request.services), bandwidth_profiles)
     await _check_router_services(context, gateway, network, request)
     ont = await gateway.find_ont_by_serial(network, serial)
     created_here = False
@@ -109,8 +127,11 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     ont_id = ont.ont_id
     # A service is already there if one with the same identity is: side, port and VLAN, or for a
     # service without a VLAN, side, port and tag action (see service_identity)
-    bound = {s.identity() for s in ont.services}
+    bound = {s.identity(): s for s in ont.services}
     missing = [s for s in request.services if s.identity() not in bound]
+    # Already bound, but not as the request asks: changed in place rather than skipped
+    changed = [(bound[s.identity()], d) for s in request.services
+               if s.identity() in bound and (d := service_differences(bound[s.identity()], s))]
 
     try:
         await context.step(3, total_steps, f"Configuring {len(request.ports)} Ethernet port(s) on ONT {ont_id}")
@@ -125,7 +146,13 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
                 await context.emit("log", f"Set port eth{config.port}: {_describe(changes)}",
                                    port=f"eth{config.port}", **changes)
 
-        await context.step(4, total_steps, f"Binding {len(missing)} service(s) to ONT {ont_id}")
+        await context.step(4, total_steps, f"Binding {len(missing)} service(s) to ONT {ont_id}"
+                                           + (f" and changing {len(changed)}" if changed else ""))
+        for existing, differences in changed:
+            where = f"{port_name(existing.attachment, existing.ont_port)} service {existing.service_index}"
+            await gateway.update_service(network, ont_id, existing.attachment, existing.ont_port,
+                                         existing.service_index, ServiceChange(**differences))
+            await context.emit("log", f"Changed {where}: {_describe(differences)}", port=where, **differences)
         # One at a time: parallel edits to the same ONT are not worth the risk
         for service in missing:
             await gateway.add_ethernet_service(network, ont_id, service)
@@ -169,6 +196,22 @@ def port_differences(current: "PortState | None", wanted: Dict[str, Any]) -> Dic
     return {k: v for k, v in wanted.items() if getattr(current, k) != v}
 
 
+def service_differences(current: ProvisionedService, wanted: EthernetService) -> Dict[str, Any]:
+    """
+    What an already bound service needs changed to match a requested one with the same identity.
+    An empty peak rate in the request means no override, as when the service is first bound. The
+    VLAN is part of the identity, and the description and admin state are left as they are.
+    """
+    target = {"bandwidth_profile": wanted.bandwidth_profile,
+              "us_pir_override": wanted.us_pir_override or "none",
+              "ds_pir_override": wanted.ds_pir_override or "none"}
+    if wanted.tag_action:
+        target["tag_action"] = wanted.tag_action
+    have = {"us_pir_override": current.us_pir_override or "none",
+            "ds_pir_override": current.ds_pir_override or "none"}
+    return {k: v for k, v in target.items() if have.get(k, getattr(current, k)) != v}
+
+
 def _describe(changes: Dict[str, Any]) -> str:
     return ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in changes.items())
 
@@ -204,7 +247,8 @@ async def _roll_back(context: JobContext, gateway: NbiGateway, network: str, ont
     await context.emit("warning", f"CMS rejected the activation; rolling back by deleting ONT {ont_id}",
                        ont_id=ont_id)
     try:
-        await gateway.delete_ont(network, ont_id)
+        # This run created the ONT, so nothing else is on it: force takes the services it added
+        await gateway.delete_ont(network, ont_id, force=True)
         await context.emit("log", f"Rolled back: ONT {ont_id} deleted", ont_id=ont_id)
     except NbiError as e:
         logger.error(f"Rollback of ONT {ont_id} on {network} failed: {e.message}")

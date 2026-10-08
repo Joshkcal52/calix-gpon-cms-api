@@ -35,6 +35,9 @@ LOG_LEVEL=INFO
 # CMS_VERIFY_TLS=true
 # CMS_USERNAME=nbi
 # CMS_PASSWORD=your_password_here
+# The bandwidth profile IDs services may use, comma-separated. Anything else is refused before it is
+# queued. This API cannot list them from CMS, so copy them from CMS. Empty: not checked.
+# BANDWIDTH_PROFILES=17,18,22
 # Topic the worker reads signup and cutover events from
 # LEGACY_EVENTS_TOPIC=legacy-gpon-events
 # Topic cutovers publish migration requests to (your XGS/SMx topic, once the schema matches)

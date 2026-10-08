@@ -9,11 +9,11 @@ a single CMS write, so there is nothing to undo if it fails.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, FrozenSet, Optional
 
-from app.controller.provisioning_controller import port_differences
+from app.controller.provisioning_controller import check_bandwidth_profiles, port_differences
 from app.models.lifecycle_model import DeleteOnt, DeleteService, OntChange, UpdatePort, UpdateService
-from app.models.provisioning_model import Attachment, PortChange, ServiceChange, parse_port
+from app.models.provisioning_model import Attachment, OntState, PortChange, ServiceChange, parse_port
 from app.nbi.errors import NbiConflictError, NbiNotFoundError, NbiRejectedError
 from app.nbi.gateway import NbiGateway
 from app.worker.runner import JobContext
@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 async def apply_ont_change(context: JobContext, gateway: NbiGateway, network: str, ont_id: int,
-                           change: OntChange) -> Dict[str, Any]:
+                           change: OntChange, *, bandwidth_profiles: Optional[FrozenSet[str]] = None) -> Dict[str, Any]:
     base = {"network": network, "ont_id": ont_id, "op": change.op}
+    if isinstance(change, UpdateService):
+        check_bandwidth_profiles([change.change.bandwidth_profile], bandwidth_profiles)
     if isinstance(change, UpdatePort):
         return {**base, **await _update_port(context, gateway, network, ont_id, change)}
     if isinstance(change, UpdateService):
@@ -124,10 +126,36 @@ async def _delete_ont(context: JobContext, gateway: NbiGateway, network: str, on
                            for s in ont.services)
         raise NbiConflictError(f"ONT {ont_id} still has {len(ont.services)} service(s): {listed}. Delete them "
                                f"first, or send force=true to delete them with the ONT.")
+    if not change.voice_checked:
+        await _refuse_if_voice_possible(gateway, network, ont)
 
+    # The services this API can see are deleted one by one, then the ONT without CMS's force. A
+    # service added since the read above, or a voice service (never read here), is then still on
+    # the ONT, and CMS refuses the delete instead of removing it unseen.
     await context.step(2, 2, f"Deleting ONT {ont_id} ({ont.serial_number}) and {len(ont.services)} service(s)")
-    await gateway.delete_ont(network, ont_id)
+    for service in ont.services:
+        await gateway.delete_service(network, ont_id, service.attachment, service.ont_port, service.service_index)
+        await context.emit("log", f"Deleted {service.attachment.value} port {service.ont_port} service "
+                                  f"{service.service_index} ({_vlan_text(service.vlan)})")
+    await gateway.delete_ont(network, ont_id, force=False)
     return {"deleted": True, "serial_number": ont.serial_number, "services_removed": len(ont.services)}
+
+
+async def _refuse_if_voice_possible(gateway: NbiGateway, network: str, ont: OntState) -> None:
+    """
+    This API does not read voice services, so it cannot tell whether an ONT has a working phone line.
+    Refuse to delete one whose profile has voice ports, or whose profile cannot be read, until
+    someone has checked and says so with voice_checked.
+    """
+    profile = next((p for p in await gateway.list_ont_profiles(network) if p.id == ont.profile), None)
+    pots = profile.pots_ports if profile else None
+    if pots == 0:
+        return
+    why = (f"its ONT profile '{ont.profile}' has {pots} voice port(s)" if pots is not None
+           else f"the voice port count of its ONT profile '{ont.profile}' could not be read")
+    raise NbiConflictError(f"ONT {ont.ont_id} may carry voice: {why}, and this API does not read voice services. "
+                           f"Check in CMS that it has no voice service to keep, then send voice_checked=true. "
+                           f"Nothing was deleted.")
 
 
 def _vlan_text(vlan: "int | None") -> str:

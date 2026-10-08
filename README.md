@@ -84,6 +84,8 @@ It is the second column of the services CSV. The export and the plan count the f
 
 The `XGS_CUTOVER` event (`POST /networks/{network}/cutovers`) does not carry voice either, and its migration request has no voice flag yet.
 
+Deleting an ONT whose profile has voice ports needs `voice_checked=true`: someone has checked in CMS that it carries no voice service to keep. The ONT itself is deleted without CMS's force, so a voice service still on it should make CMS refuse the delete rather than lose the line.
+
 ## Command-line tools
 
 ```bash

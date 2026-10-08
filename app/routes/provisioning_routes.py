@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 import logging
 
 from app.controller.job_controller import JobStore
-from app.controller.provisioning_controller import check_ont_status
+from app.controller.provisioning_controller import check_bandwidth_profiles, check_ont_status
 from app.dependencies import get_gateway, get_jobs
 from app.models.job_model import ACTION_ACTIVATE_ONT, Command, JobAccepted, LANE_PROVISIONING
 from app.models.provisioning_model import (
@@ -20,6 +20,7 @@ from app.models.provisioning_model import (
 )
 from app.nbi.gateway import NbiGateway
 from app.routes.job_routes import accepted
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ async def activate(request: ActivationRequest, http_request: Request, network: s
     or poll `status_url`. Sending the same activation twice is safe: the
     second run finds the ONT in place and only adds what is missing.
     """
+    check_bandwidth_profiles((s.bandwidth_profile for s in request.services), settings.known_bandwidth_profiles())
     command = Command(
         action=ACTION_ACTIVATE_ONT,
         lane=LANE_PROVISIONING,

@@ -52,7 +52,14 @@ class DeleteOnt(BaseModel):
     op: Literal["delete_ont"] = "delete_ont"
     serial_number: SerialNumber = Field(
         ..., description="The ONT's serial number. Deletion is refused if the ONT ID now holds another serial")
-    force: bool = Field(False, description="Delete even if the ONT still has services (they go with it)")
+    force: bool = Field(
+        False, description="Delete the ONT's data services first, then the ONT. Without it, an ONT that still has "
+                           "services is refused. Either way the ONT itself is deleted without CMS's force, so "
+                           "CMS refuses it if anything this API cannot see (such as voice) is still on it")
+    voice_checked: bool = Field(
+        False, description="Confirms someone has checked in CMS that this ONT has no voice service to keep. "
+                           "Required when its ONT profile has voice (POTS) ports, or when that cannot be read: "
+                           "this API does not read voice services")
 
 
 OntChange = Annotated[Union[UpdatePort, UpdateService, DeleteService, DeleteOnt], Field(discriminator="op")]

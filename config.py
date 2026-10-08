@@ -4,7 +4,7 @@ Configuration settings for gpon-cms
 
 import os
 from pathlib import Path
-from typing import List, Literal, Optional, Union
+from typing import FrozenSet, List, Literal, Optional, Union
 from pydantic_settings import BaseSettings
 
 
@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     cms_rg_port_type: Optional[str] = None
     cms_rg_port_id_element: Optional[str] = None
     cms_rg_port_mode_element: Optional[str] = None  # read-only: an Ethernet port's bridge/router mode
+    # The bandwidth profiles a service may use, comma-separated, exactly as CMS names them (numeric IDs
+    # on a real CMS), e.g. BANDWIDTH_PROFILES=17,18,22. Anything else is refused before a job is queued,
+    # so a typo cannot reach CMS mid-job or pick a valid but wrong speed tier. Empty: not checked here
+    # (the simulated CMS's own list in MOCK_MODE). This API cannot list them from CMS.
+    bandwidth_profiles: Optional[str] = None
     nbi_timeout_seconds: float = 10.0  # per CMS call
     nbi_max_retries: int = 2  # extra attempts for reads; writes are retried by the worker
     nbi_max_concurrency: int = 8  # CMS calls in flight per process
@@ -101,6 +106,16 @@ class Settings(BaseSettings):
         if not self.cms_verify_tls:
             return False
         return self.cms_ca_file or True
+
+    def known_bandwidth_profiles(self) -> Optional[FrozenSet[str]]:
+        """The bandwidth profiles services may use, or None if they are not checked here"""
+        listed = frozenset(p.strip() for p in (self.bandwidth_profiles or "").split(",") if p.strip())
+        if listed:
+            return listed
+        if self.mock_mode:
+            from app.nbi.mock_cms import MOCK_BANDWIDTH_PROFILES
+            return frozenset(MOCK_BANDWIDTH_PROFILES)
+        return None
 
     def run_embedded_worker(self) -> bool:
         if self.worker_embedded is not None:

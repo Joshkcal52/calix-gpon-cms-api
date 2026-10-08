@@ -55,14 +55,40 @@ def error_of(response, status, code):
 
 # --- Bandwidth profiles ------------------------------------------------------------------
 
-def test_an_unknown_bandwidth_profile_is_refused_and_the_new_ont_is_rolled_back(api):
+def test_an_unknown_bandwidth_profile_is_refused_before_anything_is_queued(api, monkeypatch):
+    backend = api.app.state.gateway.backend
+    service = {"vlan": 100, "bandwidth_profile": "NOPE-BW", "tag_action": "1"}
+    activation = error_of(api.post(f"{BASE}/activations", json={
+        "serial_number": "CXNK00C4D303", "profile": "812G-1", "services": [service]}), 422, "cms_rejected")
+    assert "Unknown bandwidth profile(s): NOPE-BW" in activation["message"]
+    assert ", ".join(sorted(MOCK_BANDWIDTH_PROFILES)) in activation["message"]  # names the ones allowed
+    signup = error_of(api.post(f"{BASE}/signups", json={
+        "subscriber_id": "SUB-4001", "serial_number": "CXNK00C4D303", "profile": "812G-1", "services": [service]}),
+        422, "cms_rejected")
+    assert "NOPE-BW" in signup["message"]
+    error_of(api.patch(f"{BASE}/onts/1/ports/eth1/services/1", json={"bandwidth_profile": "NOPE-BW"}),
+             422, "cms_rejected")
+    assert api.get("/api/v2/jobs/").json() == []  # nothing was queued
+    assert all(o.state.serial_number != "CXNK00C4D303" for o in backend._onts.values())
+    assert api.get(f"{BASE}/onts/1").json()["services"][0]["bandwidth_profile"] == "RES-1G"
+
+    # BANDWIDTH_PROFILES replaces the simulated CMS's list: VOICE is no longer allowed
+    monkeypatch.setattr(settings, "bandwidth_profiles", "RES-1G")
+    narrowed = error_of(api.patch(f"{BASE}/onts/1/ports/eth1/services/1", json={"bandwidth_profile": "VOICE"}),
+                        422, "cms_rejected")
+    assert "Allowed (BANDWIDTH_PROFILES): RES-1G." in narrowed["message"]
+
+
+def test_without_the_list_cms_refuses_it_mid_job_and_the_new_ont_is_rolled_back(api, monkeypatch):
+    # With no list to check against, the profile reaches CMS, which rejects it after the ONT is
+    # created. The ONT this run created is deleted again.
+    monkeypatch.setattr(type(settings), "known_bandwidth_profiles", lambda self: None)
     backend = api.app.state.gateway.backend
     job = finish(api, api.post(f"{BASE}/activations", json={
         "serial_number": "CXNK00C4D303", "profile": "812G-1", "wait_for_online": False,
         "services": [{"vlan": 100, "bandwidth_profile": "NOPE-BW", "tag_action": "1"}]}))
     assert job["status"] == "failed" and job["error"]["code"] == "cms_rejected"
     assert "Bandwidth profile 'NOPE-BW' does not exist" in job["error"]["message"]
-    assert ", ".join(MOCK_BANDWIDTH_PROFILES) in job["error"]["message"]  # names the ones that do
     assert all(o.state.serial_number != "CXNK00C4D303" for o in backend._onts.values())
 
     changed = finish(api, api.patch(f"{BASE}/onts/1/ports/eth1/services/1", json={"bandwidth_profile": "NOPE-BW"}))

@@ -93,6 +93,9 @@ class _MockOnt:
         ge, rg = (profile.ge_ports or 0, profile.rg_ports or 0) if profile else (0, 0)
         self.ports: Dict[int, Dict[str, Any]] = {n: _new_port() for n in range(1, ge + 1)}
         self.router_ports: Dict[int, Dict[str, Any]] = {n: {"admin_state": "enabled"} for n in range(1, rg + 1)}
+        # POTS voice lines. Like a real CMS read through this API, nothing reports them: they only
+        # show when a delete without force is refused, or are lost when one with force is sent.
+        self.voice_lines = 0
 
 
 class MockCmsBackend:
@@ -122,6 +125,8 @@ class MockCmsBackend:
                 admin_state="enabled", pon_port=ont.pon, description=ont.description,
                 subscriber_id=f"SUB-{1000 + ont.ont_id}", services=services)
             self._onts[ont.ont_id] = _MockOnt(state, on_wire=ont.online, online_at=0.0)
+            if ont.ont_id % 3 == 0:
+                self._onts[ont.ont_id].voice_lines = 1  # a POTS line the API cannot see
 
         # Optional bulk ONTs (IDs from 1001, 32 per PON on card 2) for trying things at scale
         for n in range(extra_onts):
@@ -339,9 +344,15 @@ class MockCmsBackend:
         done.append(f"added a stray service to ONT {stray}")
         return done
 
-    async def delete_ont(self, network: str, ont_id: int) -> None:
+    async def delete_ont(self, network: str, ont_id: int, *, force: bool) -> None:
         await self._exchange(network)
         ont = self._require(network, ont_id)
+        # SIMULATION RULE: without force, an ONT that still has services (voice included) is refused.
+        # That a real CMS does the same is assumed, not confirmed.
+        if not force and (ont.state.services or ont.voice_lines):
+            raise NbiConflictError(
+                f"ONT {ont_id} still has {len(ont.state.services)} data service(s) and {ont.voice_lines} voice "
+                f"line(s). Delete them first, or delete with force.")
         del self._onts[ont_id]
         if ont.on_wire:
             # Still plugged in, so it shows up as discovered again
