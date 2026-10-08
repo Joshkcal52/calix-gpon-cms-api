@@ -11,6 +11,7 @@ certificate checks, escaping the login, and characters outside ISO-8859-1.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import socket
@@ -381,3 +382,23 @@ def test_a_connection_that_never_opens_is_unreachable_not_a_timeout(raised, expe
     client._connection = lambda: httpx.AsyncClient(transport=httpx.MockTransport(fail))
     with pytest.raises(expected, match=says):
         asyncio.run(client.send("<x/>"))
+
+
+def test_non_numeric_bandwidth_profiles_are_warned_about_not_refused(caplog):
+    # Numeric IDs come from docs for an earlier CMS release, so a name is only a warning at start
+    from types import SimpleNamespace
+    from app.nbi.gateway import build_gateway
+
+    def settings(profiles):
+        return SimpleNamespace(
+            nbi_backend="cms", mock_mode=False, e7_nodes=None, cms_host="cms.example", cms_port=18443,
+            cms_username="u", cms_password="p", cms_scheme="https", cms_verify=lambda: True,
+            nbi_timeout_seconds=5, nbi_max_retries=0, nbi_max_concurrency=1, nbi_breaker_failure_threshold=5,
+            nbi_breaker_recovery_seconds=30, cms_rg_service_slot=None, cms_rg_port_mode_element=None,
+            known_bandwidth_profiles=lambda: frozenset(profiles))
+
+    for profiles, warned in ((["17", "18"], False), (["17", "RES-1G"], True)):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="app.nbi.gateway"):
+            build_gateway(settings(profiles))
+        assert any("non-numeric values (RES-1G)" in r.getMessage() for r in caplog.records) is warned

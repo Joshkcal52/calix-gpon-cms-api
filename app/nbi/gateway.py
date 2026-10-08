@@ -313,9 +313,16 @@ def build_gateway(settings: Any) -> NbiGateway:
             timeout=settings.nbi_timeout_seconds, router=router_side_addressing(settings),
             scheme=settings.cms_scheme, verify=settings.cms_verify())
         logger.info(f"CMS backend: {backend.client.url}")
-        if not settings.known_bandwidth_profiles():
+        known = settings.known_bandwidth_profiles()
+        if not known:
             logger.warning("BANDWIDTH_PROFILES is not set: bandwidth profiles are not checked before a job is "
                            "queued, so a mistyped one reaches CMS mid-job")
+        elif any(not p.isdigit() for p in known):
+            # Not refused: that CMS takes only numeric IDs comes from docs for an earlier release (KNOWN_UNKNOWNS.md)
+            names = ", ".join(sorted(p for p in known if not p.isdigit()))
+            logger.warning(f"BANDWIDTH_PROFILES has non-numeric values ({names}). CMS documentation for an earlier "
+                           f"release gives bandwidth profiles as numeric IDs (1-300); python -m app.tools.cms_check "
+                           f"shows the form this CMS uses")
         if settings.cms_scheme == "http":
             logger.warning("CMS_SCHEME is http: the CMS login and every request cross the network unencrypted")
         elif settings.cms_verify() is False:

@@ -59,6 +59,8 @@ The bug: an unknown bandwidth profile was accepted, and on a real CMS it would o
 - The simulated CMS refuses an unknown profile too, as it does an unknown ONT profile or VLAN.
 - A valid ID that is the wrong tier for the customer cannot be caught here; that is billing's data.
 
+**Open question: numeric IDs or names?** CMS documentation for an earlier release (not R15.x) gives `bw-prof` as 1-300 and `tag-action` as 1-255, which suggests numeric IDs. The CMS backend sends whatever value it is given and compares what it reads back as text, so it works either way as long as `BANDWIDTH_PROFILES`, the services this API sends and what CMS reads back all use the same form. Nothing refuses a name on the CMS path: an assumption from older docs could reject values a real CMS accepts, and a value CMS does not know is refused by CMS and rolled back anyway. The API logs a warning at start when `BANDWIDTH_PROFILES` holds non-numeric values with `NBI_BACKEND=cms`. `python -m app.tools.cms_check --ont-id <an ONT with services>` prints the values CMS wrote, which answers the question on first contact. The simulated CMS and its NBI server use names (`RES-1G`, `VOICE`); they change once a real CMS has shown the form, not before.
+
 ## The SMx side
 
 SMx parameter names come from the IDI billing SMx R24.x docs, not from SMx. Every entry in `smx_map.yml` and `profile_map.yml` is a demo value. Nothing here writes to SMx or Sonar. `XgsMigrationRequest` is this project's proposal for the migration topic, not a known schema. Whether customers keep their ONT through a cutover is not settled: the export carries the existing serial, and a replacement serial can be filled in. What the cutover tools hand over is in [CUTOVER.md](CUTOVER.md).
