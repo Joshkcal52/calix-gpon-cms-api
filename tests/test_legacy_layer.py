@@ -357,6 +357,12 @@ def test_signup_and_cutover_through_the_real_client(cms):
         async def step(self, number, total, message):
             pass
 
+        async def record_ownership(self, message, /, **data):
+            await self.emit("ownership", message, **data)
+
+        async def ownership_records(self):
+            return []
+
     async def scenario():
         bus, gateway = InMemoryBus(), NbiGateway(connect(), timeout=5)
         handlers = build_legacy_handlers(settings, gateway, bus)

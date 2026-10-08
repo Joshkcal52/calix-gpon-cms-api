@@ -21,21 +21,28 @@ Delivery rules:
     the consumer seeks back to it, so that partition waits for CMS.
   - Commands with the same key share a partition and run in order, one at a
     time. The number of partitions is therefore the cap on parallel CMS work.
+  - Each lane has its own consumer group (gpon-cms.workers.<lane>), whatever
+    other lanes a worker serves. A group with no saved position starts at the
+    beginning of the topic; the worker's age limit keeps what it finds there
+    from running again (see Worker.max_command_age).
 
 Tested against a stubbed client (tests/test_kafka_bus.py) and over the real
 Kafka wire protocol against librdkafka's mock cluster
 (tests/test_kafka_protocol.py). Not yet run against an Apache Kafka broker.
 """
 
+import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator, Callable, Dict, Optional, Sequence, Tuple
+from datetime import datetime, timezone
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence, Tuple
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
 from aiokafka.errors import CommitFailedError, KafkaError
+from aiokafka.partitioner import DefaultPartitioner
 
 from app.messaging.bus import BusUnavailableError, Delivery
-from app.models.job_model import Command, JobUpdate
+from app.models.job_model import OWNERSHIP, Command, JobUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +99,50 @@ class KafkaBus:
         await self._send(topic, json.dumps(value).encode(), key=key, wait=True)
 
     async def publish_update(self, update: JobUpdate) -> None:
-        # Status changes wait for the broker; chatter in between does not
+        # Status changes and ownership records wait for the broker; chatter in between does not
         await self._send(self.updates_topic, update.model_dump_json().encode(),
-                         key=update.job_id, wait=update.status is not None)
+                         key=update.job_id, wait=update.status is not None or update.type == OWNERSHIP)
+
+    async def job_history(self, job_id: str, since: datetime, timeout: float) -> List[JobUpdate]:
+        """
+        Updates are keyed by job id, so one job's are all in one partition. Read that partition
+        from the first offset at or after `since` to its end as it is when the read starts.
+        """
+        try:
+            return await asyncio.wait_for(self._read_job_history(job_id, since), timeout=timeout)
+        except (KafkaError, OSError, asyncio.TimeoutError) as e:
+            raise BusUnavailableError(f"Could not read the history of job {job_id} from {self.updates_topic} "
+                                      f"within {timeout:g} seconds: {e or type(e).__name__}") from e
+
+    async def _read_job_history(self, job_id: str, since: datetime) -> List[JobUpdate]:
+        if self._producer is None:
+            raise BusUnavailableError("The Kafka producer is not running.")
+        key = job_id.encode()
+        # The partition the producer chose for this key: its partitioner over the topic's partitions
+        ordered = sorted(await self._producer.partitions_for(self.updates_topic))
+        tp = TopicPartition(self.updates_topic, DefaultPartitioner()(key, ordered, ordered))
+        consumer = AIOKafkaConsumer(bootstrap_servers=self._servers, group_id=None, enable_auto_commit=False)
+        await consumer.start()
+        try:
+            consumer.assign([tp])
+            end = (await consumer.end_offsets([tp]))[tp]
+            found = (await consumer.offsets_for_times({tp: int(since.timestamp() * 1000)}))[tp]
+            if found is None or found.offset >= end:
+                return []
+            consumer.seek(tp, found.offset)
+            history: List[JobUpdate] = []
+            while await consumer.position(tp) < end:
+                for record in (await consumer.getmany(tp, timeout_ms=1000)).get(tp, []):
+                    if record.offset >= end:
+                        break
+                    if record.key == key:
+                        try:
+                            history.append(JobUpdate.model_validate_json(record.value))
+                        except ValueError:
+                            logger.warning(f"Skipping unreadable job update at offset {record.offset}")
+            return history
+        finally:
+            await consumer.stop()
 
     async def updates(self) -> AsyncIterator[JobUpdate]:
         # No consumer group: every API process reads every partition, from the
@@ -132,52 +180,70 @@ class KafkaBus:
 
 
 class KafkaCommandConsumer:
+    """
+    One Kafka consumer per lane, each in that lane's own group. A group named after a worker's
+    whole lane list would put workers with different lane lists in different groups, each taking
+    every command, and a new lane list would start a new group that re-reads the whole topic.
+    """
+
     def __init__(self, bus: KafkaBus, lanes: Sequence[str]):
         self._bus = bus
         self._lanes = sorted(lanes)
         self._attempts: Dict[Tuple[str, int, int], int] = {}
-        self._consumer: Optional[AIOKafkaConsumer] = None
+        self._consumers: Dict[str, AIOKafkaConsumer] = {}  # by topic
+        self._turn = 0
 
-    @property
-    def group_id(self) -> str:
-        """Workers serving the same lanes share a group, so Kafka splits partitions between them"""
-        return f"{self._bus._prefix}.workers.{'-'.join(self._lanes)}"
+    def group_id(self, lane: str) -> str:
+        """Every worker serving a lane shares its group, so Kafka splits that lane's partitions between them"""
+        return f"{self._bus._prefix}.workers.{lane}"
 
     async def start(self) -> None:
-        self._consumer = AIOKafkaConsumer(
-            *(self._bus.command_topic(lane) for lane in self._lanes),
-            bootstrap_servers=self._bus._servers,
-            group_id=self.group_id,
-            enable_auto_commit=False,  # offsets are committed by ack() only
-            auto_offset_reset="earliest",
-            max_poll_interval_ms=self._bus._max_poll_interval_ms,
-            session_timeout_ms=self._bus._session_timeout_ms,
-        )
-        await self._consumer.start()
-        logger.info(f"Kafka consumer started in group {self.group_id}")
+        for lane in self._lanes:
+            topic = self._bus.command_topic(lane)
+            consumer = AIOKafkaConsumer(
+                topic,
+                bootstrap_servers=self._bus._servers,
+                group_id=self.group_id(lane),
+                enable_auto_commit=False,  # offsets are committed by ack() only
+                auto_offset_reset="earliest",
+                max_poll_interval_ms=self._bus._max_poll_interval_ms,
+                session_timeout_ms=self._bus._session_timeout_ms,
+            )
+            await consumer.start()
+            self._consumers[topic] = consumer
+            logger.info(f"Kafka consumer started on {topic} in group {self.group_id(lane)}")
 
     async def stop(self) -> None:
-        if self._consumer:
-            await self._consumer.stop()  # leaves the group; uncommitted commands go to other workers
-            self._consumer = None
+        consumers, self._consumers = list(self._consumers.values()), {}
+        for consumer in consumers:
+            await consumer.stop()  # leaves the group; uncommitted commands go to other workers
 
     async def next(self, timeout: float = 1.0) -> Optional[Delivery]:
-        batches = await self._consumer.getmany(timeout_ms=int(timeout * 1000), max_records=1)
-        for records in batches.values():
-            for record in records:
-                handle = (record.topic, record.partition, record.offset)
-                try:
-                    command = self._bus.decode_command(record.topic, record.value)
-                except ValueError as e:
-                    # Unreadable forever: park it and move on, or it blocks the partition
-                    logger.error(f"Unreadable command at {handle}: {e}")
-                    await self._park(record.value, record.key, record.topic,
-                                     {"code": "invalid_command", "message": str(e)[:500]})
-                    await self._commit(handle)
-                    return None
-                self._attempts[handle] = self._attempts.get(handle, 0) + 1
-                return Delivery(command, handle=handle, attempt=self._attempts[handle])
+        # Each lane in turn, so a busy lane cannot starve the others
+        consumers = list(self._consumers.values())
+        if not consumers:
+            return None
+        self._turn = (self._turn + 1) % len(consumers)
+        for consumer in consumers[self._turn:] + consumers[:self._turn]:
+            batches = await consumer.getmany(timeout_ms=int(timeout * 1000 / len(consumers)), max_records=1)
+            for records in batches.values():
+                for record in records:
+                    return await self._deliver(record)
         return None
+
+    async def _deliver(self, record: Any) -> Optional[Delivery]:
+        handle = (record.topic, record.partition, record.offset)
+        try:
+            command = self._bus.decode_command(record.topic, record.value)
+        except ValueError as e:
+            # Unreadable forever: park it and move on, or it blocks the partition
+            logger.error(f"Unreadable command at {handle}: {e}")
+            await self._park(record.value, record.key, record.topic,
+                             {"code": "invalid_command", "message": str(e)[:500]})
+            await self._commit(handle)
+            return None
+        self._attempts[handle] = self._attempts.get(handle, 0) + 1
+        return Delivery(command, handle=handle, attempt=self._attempts[handle], queued_at=_record_time(record))
 
     async def ack(self, delivery: Delivery) -> None:
         self._attempts.pop(delivery.handle, None)
@@ -185,7 +251,7 @@ class KafkaCommandConsumer:
 
     async def retry(self, delivery: Delivery) -> None:
         topic, partition, offset = delivery.handle
-        self._consumer.seek(TopicPartition(topic, partition), offset)
+        self._consumers[topic].seek(TopicPartition(topic, partition), offset)
 
     async def dead_letter(self, delivery: Delivery, error: Dict[str, Any]) -> None:
         topic, _, _ = delivery.handle
@@ -195,7 +261,7 @@ class KafkaCommandConsumer:
     async def _commit(self, handle: Tuple[str, int, int]) -> None:
         topic, partition, offset = handle
         try:
-            await self._consumer.commit({TopicPartition(topic, partition): offset + 1})
+            await self._consumers[topic].commit({TopicPartition(topic, partition): offset + 1})
         except CommitFailedError:
             # The partition moved to another worker mid-task. That worker will get
             # this command again, which is why handlers are safe to repeat.
@@ -208,3 +274,11 @@ class KafkaCommandConsumer:
                    ("source-topic", source_topic.encode())]
         await self._bus._send(self._bus.dlq_topic, value, key=(key or b"").decode(),
                               wait=True, headers=headers)
+
+
+def _record_time(record: Any) -> Optional[datetime]:
+    """When Kafka stored the message (or its producer said it sent it), if the record says"""
+    timestamp = getattr(record, "timestamp", None)
+    if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+        return None
+    return datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)

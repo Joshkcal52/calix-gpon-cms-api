@@ -11,9 +11,13 @@ workers use, and says after each step whether CMS did what was expected:
   5. Change it: disable and enable the Ethernet port and the service, and
      (with --change-bandwidth-profile) change the service's bandwidth profile
      by running the activation again
-  6. Delete it the way the API does: the service first, then the ONT without
+  6. Delete the ONT without CMS's force while its service is still on it:
+     CMS must refuse. The API's delete and an activation's rollback rely on
+     this to keep a voice service, or a service added since they read the
+     ONT, from being removed unseen
+  7. Delete it the way the API does: the service first, then the ONT without
      CMS's force
-  7. Snapshot the PON again and compare: nothing else may have changed
+  8. Snapshot the PON again and compare: nothing else may have changed
 
     export CMS_HOST=... CMS_USERNAME=... CMS_PASSWORD=... [CMS_SCHEME=https ...]
     python -m app.tools.lab_cycle --network NTWK-LAB --pon 1/1/1 --serial CXNK0012AB34 \\
@@ -27,10 +31,12 @@ to be typed back before the first write, unless --yes is given.
 
 If a step fails after the ONT was created, the ONT is deleted with CMS's
 force to leave the lab as it was (it was created by this run, so nothing
-else is on it), and the report says so. Step 6 failing while that cleanup
-works is itself a finding: it means CMS refuses a delete without force even
-when no service is left, and app/controller/lifecycle_controller.py needs
-changing before the API's ONT delete can work.
+else is on it), and the report says so. Step 2 or 7 failing while that
+cleanup works is itself a finding: both delete the way the API does (the
+services, then the ONT without CMS's force), so it means CMS refuses a
+delete without force even when no service is left, and the API's ONT delete
+(app/controller/lifecycle_controller.py) and rollback
+(app/controller/provisioning_controller.py) need changing before they can work.
 
 With MOCK_MODE=true it runs against the simulated CMS, as a rehearsal.
 
@@ -73,6 +79,12 @@ class PrintingContext:
     async def step(self, number: int, total: int, message: str) -> None:
         print(f"      {number}/{total} {message}", file=self.out)
 
+    async def record_ownership(self, message: str, /, **data: Any) -> None:
+        await self.emit("ownership", message, **data)
+
+    async def ownership_records(self) -> List[Dict[str, Any]]:
+        return []  # one run, no earlier attempts
+
 
 class LabCycle:
     def __init__(self, gateway: NbiGateway, args: argparse.Namespace, out=sys.stdout):
@@ -94,6 +106,7 @@ class LabCycle:
             await self._step("Disable and enable the service", self.toggle_service)
             if self.args.change_bandwidth_profile:
                 await self._step("Change the bandwidth profile by activating again", self.change_bandwidth)
+            await self._step("Delete without force while a service is on it: refused", self.refused_delete)
             await self._step("Delete the service, then the ONT without force", self.delete)
         except Failed:
             await self.clean_up()
@@ -186,6 +199,30 @@ class LabCycle:
         if [s.bandwidth_profile for s in ont.services] != [self.args.change_bandwidth_profile]:
             raise Failed(f"CMS reports {[s.bandwidth_profile for s in ont.services]} after changing the bandwidth "
                          f"profile to {self.args.change_bandwidth_profile!r}.")
+
+    async def refused_delete(self) -> None:
+        # Sent straight to the gateway: the API's own delete would refuse before sending. If CMS
+        # accepts it the ONT is gone, so make sure first that the ONT ID still holds the ONT this
+        # run created (start() refused a serial that was already provisioned)
+        ont = await self.gateway.get_ont(self.network, self.ont_id)
+        if ont.serial_number != self.args.serial:
+            raise Failed(f"ONT {self.ont_id} now holds {ont.serial_number}, not {self.args.serial}. Not sent.")
+        try:
+            await self.gateway.delete_ont(self.network, self.ont_id, force=False)
+        except NbiError as e:
+            if e.retryable:
+                raise
+            print(f"      CMS refused it, as expected: {e.message}", file=self.out)
+        else:
+            if await self._find() is None:
+                self.ont_id = None  # nothing left to clean up
+            raise Failed("CMS deleted the ONT, service and all, without force. A delete through the API or a "
+                         "rollback can then remove a voice service, or a service added since it read the ONT, "
+                         "without seeing it. Do not use the API's delete or rollback on this CMS until that "
+                         "is solved.")
+        ont = await self.gateway.get_ont(self.network, self.ont_id)
+        if len(ont.services) != 1:
+            raise Failed(f"After the refused delete ONT {self.ont_id} has {len(ont.services)} services, not 1.")
 
     async def delete(self) -> None:
         # The way the API deletes: the service on its own, then the ONT without CMS's force. This ONT was

@@ -49,6 +49,9 @@ curl -s -X POST $A/signups -H 'content-type: application/json' -d '{
   "ports": [{"port": 1, "security_profile": "2"}],
   "services": [{"vlan": 100, "bandwidth_profile": "RES-1G", "tag_action": "1"}]}'
 
+# (RES-1G and tag action 1 are the simulated CMS's. A real CMS takes numeric IDs for both:
+# bw-prof 1-300 and tag-action 1-255, as listed in BANDWIDTH_PROFILES)
+
 # Watch it happen, using the events_url from that reply
 curl -N http://localhost:8000/api/v2/jobs/<job id>/events
 

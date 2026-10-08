@@ -351,7 +351,8 @@ def test_the_check_reads_and_reports_without_changing_anything(nbi_server, tmp_p
     assert run.returncode == 0, run.stdout + run.stderr
     for line in ("[ok] login and list ONTs", "[ok] read ONT 3 with its services", "[ok] read ONT 3 ports and router side",
                  "[ok] list ONT profiles", "[ok] list VLANs", "[ok] log out", "Ont.op-stat: enable, sys-disable",
-                 "Service ONT slots seen: 3", "every step worked. Nothing was changed."):
+                 "Service ONT slots seen: 3", "    bandwidth_profile: RES-1G", "    tag_action: 1",
+                 "every step worked. Nothing was changed."):
         assert line in run.stdout, line
     assert {r["kind"] for r in server.app.state.requests} == {"login", "action", "get", "logout"}
     assert server.app.state.sessions == set()  # logged out

@@ -227,6 +227,12 @@ class Recorder:
     async def step(self, number, total, message):
         self.events.append(("step", message))
 
+    async def record_ownership(self, message, /, **data):
+        await self.emit("ownership", message, **data)
+
+    async def ownership_records(self):
+        return []
+
 
 @pytest.fixture
 def cms(nbi_server):

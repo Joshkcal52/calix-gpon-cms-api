@@ -6,8 +6,8 @@ each command only when its outcome is settled.
 For every command exactly one of these happens:
 
   success             publish the result, then acknowledge (commit the offset)
-  failed for good     publish the error, copy the command to the dead-letter
-                      queue, then acknowledge. Nothing is dropped, and one bad
+  failed for good     copy the command to the dead-letter queue, publish the
+                      error, then acknowledge. Nothing is dropped, and one bad
                       command cannot block the ones behind it.
   failed for now      (CMS down, timeout, breaker open) do NOT acknowledge.
                       Wait, then take the same command again. Work queues up
@@ -25,12 +25,12 @@ run as their own pods: `python -m app.worker`.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional, Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 from app import audit
 from app.messaging.bus import BusUnavailableError, CommandConsumer, Delivery, MessageBus
-from app.models.job_model import Command, JobStatus, JobUpdate
+from app.models.job_model import OWNERSHIP, Command, JobStatus, JobUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -50,21 +50,59 @@ class JobError(Exception):
         return {"code": self.code, "message": self.message, "retryable": self.retryable, **self.data}
 
 
+# How far before the command's earlier timestamp to start reading its job's history, for clocks that
+# disagree, and how long the read may take before the attempt fails and is retried
+HISTORY_MARGIN = timedelta(minutes=10)
+HISTORY_TIMEOUT = 30.0
+
+
 class JobContext:
     """Handed to a handler so it can report progress on its job"""
 
-    def __init__(self, bus: MessageBus, command: Command, attempt: int):
+    def __init__(self, bus: MessageBus, command: Command, attempt: int, queued_at: Optional[datetime] = None):
         self._bus = bus
         self._loop = asyncio.get_running_loop()
         self.command = command
         self.job_id = command.id
         self.attempt = attempt
+        self.queued_at = queued_at
         self._outbox: Optional[asyncio.Queue] = None
         self._pump: Optional[asyncio.Task] = None
 
+    async def record_ownership(self, message: str, /, **data: Any) -> None:
+        """
+        Record in the job's history something this job created in CMS. Unlike emit(), it must land:
+        it waits for the bus and raises BusUnavailableError if the bus will not take it. A record
+        that is missing means "not this job's", so a later attempt leaves that thing alone.
+        """
+        await self._publish(OWNERSHIP, message, data)
+
+    async def ownership_records(self) -> List[Dict[str, Any]]:
+        """
+        The data of every ownership record earlier attempts of this job published. Reads the job's
+        history from a little before the earlier of the command's own time and when the bus stored
+        it. Raises BusUnavailableError if the history cannot be read; nothing has been changed then,
+        so the attempt is retried.
+
+        Empty once the job has succeeded: what it created is then a working customer's, and a
+        redelivery (its acknowledgement lost) must not treat it as its own to roll back.
+        """
+        times = [t for t in (self.command.created_at, self.queued_at) if t is not None]
+        history = await self._bus.job_history(self.job_id, min(times) - HISTORY_MARGIN, timeout=HISTORY_TIMEOUT)
+        if any(u.status == JobStatus.SUCCEEDED for u in history):
+            return []
+        return [u.data or {} for u in history if u.type == OWNERSHIP]
+
     async def emit(self, type: str, message: str, /, **data: Any) -> None:
-        """Publish a progress event for this job"""
-        await self._publish(type, message, data)
+        """
+        Publish a progress event for this job. One the bus will not take is dropped with a
+        warning, so a Kafka outage cannot stop CMS work (a rollback above all) halfway. Only the
+        job's status updates, published by the worker, have to land.
+        """
+        try:
+            await self._publish(type, message, data)
+        except BusUnavailableError as e:
+            logger.warning(f"Dropped a progress event for job {self.job_id}: {e.message}")
 
     async def step(self, number: int, total: int, message: str) -> None:
         await self.emit("step", message, step=number, total_steps=total)
@@ -86,9 +124,7 @@ class JobContext:
         while True:
             type, message, data = await self._outbox.get()
             try:
-                await self._publish(type, message, data)
-            except BusUnavailableError as e:
-                logger.warning(f"Dropped a progress event for job {self.job_id}: {e.message}")
+                await self.emit(type, message, **data)
             finally:
                 self._outbox.task_done()
 
@@ -116,6 +152,16 @@ def describe_error(exc: BaseException) -> Dict[str, Any]:
     if hasattr(exc, "to_dict"):  # NbiError, JobError, BusUnavailableError
         return exc.to_dict()
     return {"code": "internal_error", "message": f"Unexpected error: {exc}", "retryable": False}
+
+
+def command_age(command: Command, delivery: Delivery) -> float:
+    """
+    Seconds since the command was made, by the earlier of its own time (created_at: the API's
+    clock, or a legacy event's occurred_at) and when the bus stored it. A producer that leaves its
+    time out, or whose clock is wrong, cannot make an old command look new.
+    """
+    times = [t for t in (command.created_at, delivery.queued_at) if t is not None]
+    return (datetime.now(timezone.utc) - min(times)).total_seconds()
 
 
 class Worker:
@@ -162,15 +208,15 @@ class Worker:
 
     async def _handle(self, consumer: CommandConsumer, delivery: Delivery) -> None:
         command = delivery.command
-        context = JobContext(self._bus, command, delivery.attempt)
-        age = (datetime.now(timezone.utc) - command.created_at).total_seconds()
+        context = JobContext(self._bus, command, delivery.attempt, delivery.queued_at)
+        age = command_age(command, delivery)
         expired = age > self.max_command_age
 
         try:
             if expired:
                 raise JobError(
                     "command_expired",
-                    f"This request waited {age / 60:.0f} minutes in the queue, longer than the "
+                    f"This request is {age / 60:.0f} minutes old, older than the "
                     f"{self.max_command_age / 60:.0f} minute limit, so it was not run. "
                     f"Submit it again if it is still wanted.")
             handler = self._handlers.get(command.action)
@@ -205,10 +251,12 @@ class Worker:
                 await self._pause(delay)
                 return
 
+            # Park it before saying it failed: if the park fails, the command runs again and nothing
+            # has yet told the job it failed, so a published outcome is final
+            await consumer.dead_letter(delivery, error)
             await context._publish("error", error["message"], error, status=JobStatus.FAILED, error=error)
             audit.record("failed", command, attempt=delivery.attempt, error_code=error.get("code"),
                          error=error.get("message"))
-            await consumer.dead_letter(delivery, error)
             await consumer.ack(delivery)  # the outcome is recorded, safe to move on
             return
 

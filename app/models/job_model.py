@@ -45,13 +45,18 @@ class Command(BaseModel):
     requested_by: Optional[str] = Field(None, description="Who asked for it: the API key's name (see app/audit.py)")
 
 
+# An update recording what this job created in CMS (an ONT, a service), so a later attempt of the same
+# job can tell its own work from someone else's. Published with a wait, like a status change.
+OWNERSHIP = "ownership"
+
+
 class JobUpdate(BaseModel):
     """A progress message published by the API (queued) or a worker (everything else)"""
     id: str = Field(default_factory=new_id)
     job_id: str
     kind: str
     summary: str
-    type: str = Field(..., description="status, step, log, warning, error or result")
+    type: str = Field(..., description="status, step, log, warning, error, result or ownership")
     message: str
     data: Optional[Dict[str, Any]] = None
     status: Optional[JobStatus] = Field(None, description="Set when this update changes the job status")

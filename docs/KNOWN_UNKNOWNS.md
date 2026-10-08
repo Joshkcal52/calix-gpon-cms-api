@@ -37,9 +37,9 @@ The risk: CMS's "force" delete removes an ONT with everything on it, and this AP
 
 - An ONT whose profile has voice ports, or whose count cannot be read, is refused unless `voice_checked=true` says someone has checked it in CMS.
 - An ONT that still has data services is refused unless `force=true`. With it, the data services are deleted one by one, then the ONT is deleted **without** CMS's force, so CMS should refuse it while anything is left (a voice service, or a service added since the read).
-- Only a rollback uses CMS's force, and only on the ONT the same activation just created.
+- Nothing uses CMS's force on an ONT delete: a rollback also deletes the services its activation added, then the ONT without force.
 
-**Inferred, not verified:** that CMS refuses a delete without force while services are left, and accepts one when nothing is left. If it insists on force even for an empty ONT, the API's delete fails (safely) and `app/controller/lifecycle_controller.py` must change. `lab_cycle` checks exactly this on a spare ONT. Also see "an empty read" above.
+**Inferred, not verified:** that CMS refuses a delete without force while services are left, and accepts one when nothing is left. If it insists on force even for an empty ONT, the API's delete and an activation's rollback fail (safely, leaving the ONT and saying so) and `app/controller/lifecycle_controller.py` and `_roll_back` in `app/controller/provisioning_controller.py` must change. The other direction matters more: if CMS removes the services with the ONT even without force, neither the voice protection nor the rollback's protection of another run's services works, and nothing fails to say so. `lab_cycle` checks both directions on a spare ONT (steps 6 and 7). Also see "an empty read" above.
 
 ## The E7 command-line path
 
@@ -58,6 +58,8 @@ The bug: an unknown bandwidth profile was accepted, and on a real CMS it would o
 - `BANDWIDTH_PROFILES` (copied by hand from CMS, or the E7's names on the E7 path; this API cannot list them) is checked before an activation, signup or service change is queued, and again by the worker for signups from the events topic. **Unset, nothing is checked** before CMS. Set it before going live.
 - The simulated CMS refuses an unknown profile too, as it does an unknown ONT profile or VLAN.
 - A valid ID that is the wrong tier for the customer cannot be caught here; that is billing's data.
+
+**Open question: numeric IDs or names?** CMS documentation for an earlier release (not R15.x) gives `bw-prof` as 1-300 and `tag-action` as 1-255, which suggests numeric IDs. The CMS backend sends whatever value it is given and compares what it reads back as text, so it works either way as long as `BANDWIDTH_PROFILES`, the services this API sends and what CMS reads back all use the same form. Nothing refuses a name on the CMS path: an assumption from older docs could reject values a real CMS accepts, and a value CMS does not know is refused by CMS and rolled back anyway. The API logs a warning at start when `BANDWIDTH_PROFILES` holds non-numeric values with `NBI_BACKEND=cms`. `python -m app.tools.cms_check --ont-id <an ONT with services>` prints the values CMS wrote, which answers the question on first contact. The simulated CMS and its NBI server use names (`RES-1G`, `VOICE`); they change once a real CMS has shown the form, not before.
 
 ## The SMx side
 

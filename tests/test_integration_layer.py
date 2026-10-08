@@ -8,14 +8,15 @@ in-memory bus; no CMS, Kafka or network is needed.
 import asyncio
 import json
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.controller.provisioning_controller import activate_ont
-from app.messaging.bus import BusUnavailableError, InMemoryBus
-from app.models.job_model import Command, JobStatus
+from app.controller.job_controller import JobStore
+from app.messaging.bus import BusUnavailableError, Delivery, InMemoryBus
+from app.models.job_model import Command, JobStatus, JobUpdate
 from app.models.provisioning_model import ActivationRequest, EthernetService, OntSpec
 from app.nbi.breaker import CLOSED, HALF_OPEN, OPEN, CircuitBreaker
 from app.nbi.errors import (
@@ -23,7 +24,7 @@ from app.nbi.errors import (
 )
 from app.nbi.gateway import NbiGateway, build_gateway
 from app.nbi.mock_cms import MOCK_NETWORK, MockCmsBackend
-from app.worker.runner import Worker
+from app.worker.runner import Worker, command_age
 from config import settings
 from main import app
 
@@ -178,6 +179,7 @@ class RecordingBus(InMemoryBus):
         self.log = []
         self.published = []
         self.fail_updates = 0
+        self.fail_parks = 0
 
     async def publish_update(self, update):
         if self.fail_updates and update.status in (JobStatus.SUCCEEDED, JobStatus.FAILED):
@@ -204,6 +206,9 @@ class RecordingBus(InMemoryBus):
 
             async def dead_letter(self, delivery, error):
                 bus.log.append("dead_letter")
+                if bus.fail_parks:
+                    bus.fail_parks -= 1
+                    raise BusUnavailableError("broker down")
                 await consumer.dead_letter(delivery, error)
 
         return Recording()
@@ -255,7 +260,7 @@ def test_worker_parks_a_permanent_failure_then_acknowledges():
 
     run_worker(bus, handler, command())
 
-    assert bus.log == ["update:status", "update:error", "dead_letter", "ack"]
+    assert bus.log == ["update:status", "dead_letter", "update:error", "ack"]  # parked before FAILED
     assert bus.published[-1].status == JobStatus.FAILED
     assert bus.published[-1].error["code"] == "cms_rejected"
     parked_command, parked_error = bus.dead_letters[0]
@@ -346,8 +351,71 @@ def test_worker_fails_a_command_that_waited_too_long_without_running_it():
     run_worker(bus, handler, stale, max_command_age=3600)
 
     assert called == []
-    assert bus.log == ["update:error", "dead_letter", "ack"]
+    assert bus.log == ["dead_letter", "update:error", "ack"]
     assert bus.published[-1].error["code"] == "command_expired"
+
+
+def test_a_command_is_as_old_as_the_earlier_of_its_own_time_and_the_bus_time():
+    # A producer that left occurred_at out (so it was stamped when read) or has a slow clock
+    # cannot make a command the bus has held for hours look new
+    now = datetime.now(timezone.utc)
+    fresh_looking = command(created_at=now)
+    assert command_age(fresh_looking, Delivery(fresh_looking, queued_at=now - timedelta(hours=2))) >= 7200
+    assert command_age(fresh_looking, Delivery(fresh_looking, queued_at=None)) < 60
+    old = command(created_at=now - timedelta(hours=3))
+    assert command_age(old, Delivery(old, queued_at=now)) >= 3 * 3600  # a clock running fast does not help
+
+
+def test_a_failed_park_runs_the_command_again_before_anything_says_it_failed():
+    bus = RecordingBus()
+    bus.fail_parks = 1
+
+    async def handler(context, payload):
+        raise NbiRejectedError("VLAN 999 does not exist.")
+
+    run_worker(bus, handler, command())
+
+    assert bus.log == ["update:status", "dead_letter", "retry", "update:status", "dead_letter", "update:error", "ack"]
+    assert [u.status for u in bus.published if u.status in (JobStatus.FAILED, JobStatus.SUCCEEDED)] == [JobStatus.FAILED]
+
+
+def test_a_finished_job_keeps_its_status_when_the_command_runs_again():
+    jobs = JobStore(InMemoryBus())
+
+    def update(status, type="status"):
+        return JobUpdate(job_id="j1", kind="activation", summary="s", type=type, message=type, status=status)
+
+    for status in (JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.SUCCEEDED):
+        jobs.apply(update(status))
+    finished_at = jobs.get("j1").finished_at
+    # A redelivery after the outcome was published, then the topic re-read once the command is too old
+    jobs.apply(update(JobStatus.RUNNING))
+    jobs.apply(update(JobStatus.FAILED, type="error"))
+
+    job = jobs.get("j1")
+    assert job.status == JobStatus.SUCCEEDED and job.finished_at == finished_at
+    assert len(asyncio.run(_all_events(jobs, "j1"))) == 5  # still in the job's log
+
+
+def test_a_failed_job_that_then_succeeds_says_succeeded():
+    # FAILED was published, the park or the acknowledgement was lost, and the re-run succeeded:
+    # the customer is provisioned, so the job must not keep saying it failed
+    jobs = JobStore(InMemoryBus())
+
+    def update(status, type="status"):
+        return JobUpdate(job_id="j1", kind="activation", summary="s", type=type, message=type, status=status)
+
+    for status in (JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.FAILED, JobStatus.RUNNING):
+        jobs.apply(update(status))
+    assert jobs.get("j1").status == JobStatus.FAILED  # the re-run's RUNNING does not reopen it
+    jobs.apply(update(JobStatus.SUCCEEDED, type="result"))
+    assert jobs.get("j1").status == JobStatus.SUCCEEDED
+    jobs.apply(update(JobStatus.FAILED, type="error"))  # and a later FAILED does not take that back
+    assert jobs.get("j1").status == JobStatus.SUCCEEDED
+
+
+async def _all_events(jobs, job_id):
+    return [e async for e in jobs.events(job_id)]
 
 
 def test_worker_parks_unknown_actions_and_crashes():
@@ -394,6 +462,12 @@ class NullContext:
 
     async def step(self, number, total, message):
         self.messages.append(message)
+
+    async def record_ownership(self, message, /, **data):
+        await self.emit("ownership", message, **data)
+
+    async def ownership_records(self):
+        return []
 
 
 def activation(**overrides):
@@ -635,3 +709,19 @@ def test_activation_waits_out_a_cms_outage_instead_of_failing(api, monkeypatch):
 def test_unknown_job_is_404(api):
     assert api.get("/api/v2/jobs/nope").status_code == 404
     assert api.get("/api/v2/jobs/nope/events").status_code == 404
+
+
+def test_the_in_memory_bus_keeps_each_jobs_history_like_kafka():
+    # So ownership records work in the default single-process mode too
+    async def scenario():
+        bus = InMemoryBus()
+        bus.max_history_jobs = 2
+        before = datetime.now(timezone.utc)
+        for job in ("j1", "j2", "j1", "j3"):
+            await bus.publish_update(JobUpdate(job_id=job, kind="k", summary="s", type="ownership", message=job))
+        assert [u.message for u in await bus.job_history("j3", before, timeout=1)] == ["j3"]
+        assert [u.message for u in await bus.job_history("j1", before, timeout=1)] == ["j1", "j1"]
+        assert await bus.job_history("j2", before, timeout=1) == []  # the oldest job, dropped
+        assert await bus.job_history("j1", datetime.now(timezone.utc) + timedelta(minutes=1), timeout=1) == []
+
+    asyncio.run(scenario())

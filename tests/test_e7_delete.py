@@ -1,5 +1,5 @@
 """
-Deleting an ONT on the E7 path: through the API (the gateway passes force since PR #10), without
+Deleting an ONT on the E7 path: through the API and in a rollback (the gateway passes force since PR #10), without
 forced so a voice line the API cannot see stops it, and linked to its PON again when it is refused.
 """
 
@@ -86,15 +86,16 @@ def test_an_ont_with_voice_ports_needs_voice_checked(api):
     assert [c for c in e7.commands[before:] if not c.startswith(("show ", "set session"))] == []
 
 
-def test_a_rollback_still_deletes_with_forced(api):
+def test_a_rollback_removes_its_services_then_deletes_without_forced(api):
     client, e7 = api
     job = finished(client, client.post(f"{B}/signups", json={  # the second service is refused by the E7
         "subscriber_id": "SUB-1", "serial_number": "CXNK00C0FFEE", "profile": "716GE-I",
         "services": [{"vlan": 100, "bandwidth_profile": "RES-1G", "tag_action": "ADD-OUTER"},
                      {"vlan": 300, "bandwidth_profile": "RES-1G", "tag_action": "NOT-ON-THIS-E7"}]}))
     assert job["status"] == "failed"
-    deletes = [c for c in e7.commands if c.startswith("delete ont")]
-    assert len(deletes) == 1 and deletes[0].endswith(" forced")
+    deletes = [c for c in e7.commands if c.startswith(("remove eth-svc", "delete ont"))]
+    assert len(deletes) == 2 and deletes[0].startswith("remove eth-svc Data1")
+    assert deletes[1].startswith("delete ont") and not deletes[1].endswith(" forced")
     assert all(o["serial"] != "00C0FFEE" for o in e7.onts.values())
 
 

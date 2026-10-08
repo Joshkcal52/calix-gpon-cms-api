@@ -73,6 +73,8 @@ def install_guard(client: Any, dump: Optional[Path]) -> Callable[[], None]:
 class Report:
     def __init__(self) -> None:
         self.steps: List[Dict[str, Any]] = []
+        # Bandwidth profile and tag action values as CMS wrote them on the ONT read: numeric IDs or names?
+        self.service_values: Dict[str, List[str]] = {"bandwidth_profile": [], "tag_action": []}
 
     def step(self, name: str, ok: bool, detail: Any) -> None:
         self.steps.append({"step": name, "ok": ok, "detail": detail})
@@ -103,8 +105,10 @@ async def run_check(backend: Any, network: str, ont_id: Optional[int], report: R
     if ont_id is None and onts:
         ont_id = onts[0].ont_id
     if ont_id is not None:
-        await attempt(f"read ONT {ont_id} with its services", lambda: backend.get_ont(network, ont_id),
-                      lambda ont: ont.model_dump(mode="json"))
+        ont = await attempt(f"read ONT {ont_id} with its services", lambda: backend.get_ont(network, ont_id),
+                            lambda ont: ont.model_dump(mode="json"))
+        for field in report.service_values if ont else ():
+            report.service_values[field] = sorted({getattr(s, field) or "(empty)" for s in ont.services})
         await attempt(f"read ONT {ont_id} ports and router side", lambda: backend.get_ont_ports(network, ont_id),
                       lambda ports: ports.model_dump(mode="json"))
     else:
@@ -136,6 +140,11 @@ def print_text(report: Report, found: Dict[str, Any], out=sys.stdout) -> None:
     print("\nRaw values of fields whose meaning is inferred (check these by eye):", file=out)
     for field, values in found["raw_values_of_inferred_fields"].items():
         print(f"    {field}: {', '.join(values)}", file=out)
+    print("\nBandwidth profile and tag action values on that ONT's services, as CMS wrote them. Numeric IDs or "
+          "names? BANDWIDTH_PROFILES and the services this API sends must use the same form (see "
+          "docs/KNOWN_UNKNOWNS.md):", file=out)
+    for field, values in report.service_values.items():
+        print(f"    {field}: {', '.join(values) or 'none read (pick an --ont-id with services)'}", file=out)
     print(f"\nService ONT slots seen: {', '.join(found['service_ont_slots_seen']) or 'none'}", file=out)
     print("    3 is Gigabit Ethernet. Any other value on an ONT with a router is a candidate for "
           "CMS_RG_SERVICE_SLOT (see app/nbi/router_side.py).", file=out)
@@ -185,7 +194,8 @@ def main() -> None:
 
     found = findings(backend)
     if args.json:
-        print(json.dumps({"ok": report.ok, "steps": report.steps, **found}, indent=2, default=str))
+        print(json.dumps({"ok": report.ok, "steps": report.steps, "service_values": report.service_values, **found},
+                         indent=2, default=str))
     else:
         print(f"CMS read-only check: {backend.client.url}, network {args.network}\n")
         print_text(report, found)

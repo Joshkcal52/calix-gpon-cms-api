@@ -551,6 +551,12 @@ def test_activation_through_the_gateway_is_safe_to_run_twice(e7):
         async def step(self, number, total, message):
             pass
 
+        async def record_ownership(self, message, /, **data):
+            await self.emit("ownership", message, **data)
+
+        async def ownership_records(self):
+            return []
+
     request = ActivationRequest(serial_number="CXNK00A3F104", profile="844G-1", services=[
         EthernetService(vlan=100, bandwidth_profile="RES-1G", tag_action="ADD-OUTER"),
         EthernetService(bandwidth_profile="RES-1G", tag_action="MOCK-NO-VLAN", attach_to="router")])
