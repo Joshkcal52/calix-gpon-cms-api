@@ -1,6 +1,6 @@
 # Known unknowns and open risks
 
-Everything about this project that is untested, guessed, or not built, in one place. Read it before trusting the code with live subscribers. [HANDOFF.md](../HANDOFF.md) has the short version; [ARCHITECTURE.md](ARCHITECTURE.md) has the design.
+Everything about this project that is untested, guessed, or not built, in one place. Read it before trusting the code with live subscribers. [HANDOFF.md](../HANDOFF.md) has the short version; [ARCHITECTURE.md](ARCHITECTURE.md) has the design. [ANTI_PATTERNS.md](ANTI_PATTERNS.md) maps fifteen common failure patterns of network automation tools onto this code.
 
 Status words used below: **verified** means tested against the mock CMS or mock E7 (never a real one); **inferred** means guessed from public sources; **not built** means the code refuses or skips it.
 
