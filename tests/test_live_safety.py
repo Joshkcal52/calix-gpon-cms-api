@@ -28,7 +28,7 @@ from app.messaging.bus import BusUnavailableError
 from app.models.job_model import Command
 from app.models.lifecycle_model import DeleteOnt
 from app.models.provisioning_model import (
-    ActivationRequest, Attachment, EthernetService, OntProfile, ProvisionedService
+    ActivationRequest, Attachment, EthernetService, OntProfile, OntSpec, ProvisionedService
 )
 from app.nbi.breaker import CircuitBreaker
 from app.nbi.errors import NbiConflictError, NbiRejectedError
@@ -177,6 +177,23 @@ def test_rollback_leaves_an_ont_another_run_is_provisioning():
         ont = next(o.state for o in backend._onts.values() if o.state.serial_number == NEW_SERIAL)
         assert sorted(s.ont_port for s in ont.services) == [1, 2]
         assert any(m.startswith("Not rolled back") for m in recorder.messages)
+
+    asyncio.run(scenario())
+
+
+def test_a_retry_that_finds_the_ont_says_it_may_be_left_partially_provisioned():
+    # Attempt 1 created the ONT, then CMS timed out. Attempt 2 finds it, cannot tell it made it,
+    # and does not roll it back: the failure must say so
+    async def scenario():
+        gateway, backend = make_gateway()
+        request = rejected_request()
+        await gateway.create_ont(NET, OntSpec(**request.model_dump(include=set(OntSpec.model_fields))))
+        recorder = Recorder()
+        recorder.attempt = 2
+        with pytest.raises(NbiRejectedError) as failed:
+            await activate_ont(recorder, gateway, NET, request, verify_timeout=0, poll_seconds=0)
+        assert "NOPE-BW" in failed.value.message and "left partially provisioned" in failed.value.message
+        assert any(o.state.serial_number == NEW_SERIAL for o in backend._onts.values())
 
     asyncio.run(scenario())
 

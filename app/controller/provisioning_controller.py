@@ -167,8 +167,15 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
     except NbiError as e:
         # Roll back only when CMS said no. If CMS is merely unreachable the
         # command is retried and carries on from here.
-        if not e.retryable and created_here and request.rollback_on_failure:
-            await _roll_back(context, gateway, network, ont_id, added)
+        if not e.retryable and request.rollback_on_failure:
+            if created_here:
+                await _roll_back(context, gateway, network, ont_id, added)
+            elif context.attempt > 1:
+                # This attempt cannot tell whether an earlier one created the ONT, so it is not rolled
+                # back. Say so plainly rather than leave a partial ONT unmentioned.
+                e.message += (f" ONT {ont_id} was already on CMS when attempt {context.attempt} of this job started, "
+                              f"so it was not rolled back. If an earlier attempt created it, it is left partially "
+                              f"provisioned: check it in CMS and delete it if no one else is using it.")
         raise
 
     if request.wait_for_online:
