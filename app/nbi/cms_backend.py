@@ -11,10 +11,25 @@ and the concurrency cap.
 
 NOT VERIFIED AGAINST A REAL CMS. It is tested against the mock NBI server
 (app/nbi/mock_cms_server.py). The request shapes are those cms-nbi-client
-0.1.0 sends; anything it did not parse is a guess: the op-stat values, the
-linked-pon element, the rpc-error tags used to tell "not found" from
-"already exists", the element names in an Ethernet port (OntEthGe) reply,
-and the meaning of the OntProf values (port counts, "true"/"false").
+0.1.0 sends. CMS NBI documentation for an earlier release (not R15.x) has
+since settled some of what was guessed:
+
+  - show-ont answers each ONT as two objects, provisioning under get-config
+    and state under get (app/nbi/client.py merges them).
+  - op-stat takes the values enable, sys-disable and user-disable. That
+    enable means the ONT is up is still inferred.
+  - linked-pon is a GponPort with shelf, card and gponport.
+  - The OntEthGe element names (admin, subscr-id, descr, sec/EthSecProf,
+    speed, duplex, ...) are those of a port update.
+  - A delete without force fails while the ONT still has services; with
+    force, CMS deletes them too.
+  - EthSvc: bw-prof 1-300, tag-action 1-255, out-tag and in-tag 2-4093 and
+    read back as none when not sent, ethsvc 1-12, ontethany 1-8.
+
+Still guesses: the rpc-error tags used to tell "not found" from "already
+exists" (the documented error is operation-failed with the detail in
+error-app-tag), the meaning of the OntProf values (port counts,
+"true"/"false"), and the DiscOnt reply.
 
 Two requests are deliberately not the library's: the library's Ethernet port
 update (E7.Update.ont_geth) raised KeyError on every call and its service
@@ -189,8 +204,12 @@ def _ont_state(obj: Dict[str, Any], services: Optional[List[ProvisionedService]]
 def _attachment(slot: Optional[str], router: Optional[RouterAddressing]) -> Attachment:
     """
     Slot 3 (or none given) is a Gigabit Ethernet port. A slot equal to the
-    configured router-side slot is the router. Anything else, including 4
-    (HPNA) and 5 (Fast Ethernet), is reported as unknown rather than guessed.
+    configured router-side slot is the router. Anything else is reported as
+    unknown rather than guessed. CMS NBI documentation lists 4 (HPNA
+    Ethernet) and 5 (Fast Ethernet) for services on a port, 8 for the router
+    (OntRg) and 9 for a full-bridge interface (OntFb), which carries services
+    of its own: an 844G running as a bridge may hold its data service in slot
+    9 rather than 3. Those read as unknown here.
     """
     if slot in (None, ONT_SLOT):
         return Attachment.ETHERNET

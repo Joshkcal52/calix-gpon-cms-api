@@ -10,8 +10,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 from enum import Enum
 
-# CMS network (node) name, e.g. NTWK-MOCK-E7
-NETWORK_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+# CMS network (node) name, e.g. NTWK-MOCK-E7. Per CMS NBI documentation, up to 59 characters of letters,
+# digits, underscores and spaces, preceded by NTWK-. Spaces are allowed inside the name,
+# not at either end; dots are kept for names this project already accepted.
+NETWORK_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9 _.-]{0,57}[A-Za-z0-9_.-])?$"
+
+# Description lengths CMS accepts, per CMS NBI documentation. A longer one
+# would be refused by CMS partway through a job, so it is refused here before anything is queued.
+ONT_DESCRIPTION_MAX = 48  # Ont <descr>
+SERVICE_DESCRIPTION_MAX = 31  # EthSvc <descr>
+PORT_DESCRIPTION_MAX = 47  # OntEthGe <descr>
 
 NetworkName = Annotated[str, Field(pattern=NETWORK_PATTERN, description="CMS network name")]
 SerialNumber = Annotated[str, Field(pattern=r"^[A-Za-z0-9]{4,16}$", description="ONT serial number")]
@@ -100,7 +108,7 @@ class EthernetService(BaseModel):
     bandwidth_profile: ProfileName = Field(..., description="Bandwidth profile (a numeric ID on a real CMS)")
     tag_action: Optional[ProfileName] = Field(
         None, description="Service tag action (a numeric ID on a real CMS, which requires one)")
-    description: Optional[str] = Field(None, max_length=64)
+    description: Optional[str] = Field(None, max_length=SERVICE_DESCRIPTION_MAX)
     us_pir_override: Optional[PeakRate] = Field(
         None, description='Upstream peak rate override, e.g. "100m". Empty sends "none" (no override)')
     ds_pir_override: Optional[PeakRate] = Field(
@@ -173,7 +181,7 @@ class EthernetPortConfig(BaseModel):
     admin_state: Optional[AdminState] = None
     subscriber_id: Optional[SubscriberId] = None
     security_profile: Optional[SecurityProfileId] = None
-    description: Optional[str] = Field(None, max_length=48)
+    description: Optional[str] = Field(None, max_length=PORT_DESCRIPTION_MAX)
     mode: Optional[PortMode] = Field(
         None, description="bridge or router. Only the simulated CMS can set this: on a real CMS the request "
                           "is refused (cms_unverified), because how CMS sets it is not known")
@@ -189,7 +197,7 @@ class PortChange(BaseModel):
     admin_state: Optional[AdminState] = None
     subscriber_id: Optional[SubscriberId] = None
     security_profile: Optional[SecurityProfileId] = None
-    description: Optional[str] = Field(None, max_length=48)
+    description: Optional[str] = Field(None, max_length=PORT_DESCRIPTION_MAX)
     mode: Optional[PortMode] = Field(None, description="bridge or router (simulated CMS only, see EthernetPortConfig)")
 
     @model_validator(mode="after")
@@ -297,7 +305,7 @@ class OntSpec(BaseModel):
     serial_number: SerialNumber
     ont_id: Optional[OntId] = Field(None, description="Leave empty to take the next free ID")
     profile: ProfileName = Field(..., description="ONT profile name")
-    description: Optional[str] = Field(None, max_length=64)
+    description: Optional[str] = Field(None, max_length=ONT_DESCRIPTION_MAX)
     subscriber_id: Optional[SubscriberId] = None
 
 

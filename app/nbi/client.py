@@ -27,7 +27,8 @@ What it does:
   - Verifies the CMS server's certificate over HTTPS unless told not to.
 
 NOT VERIFIED AGAINST A REAL CMS. The request shapes are the library's and the
-reply shapes are the mock server's. Inferred, not known: the rpc-error tags
+reply shapes are the mock server's, which follows CMS NBI documentation where
+it is clear (show-ont, delete, paging). Inferred, not known: the rpc-error tags
 used to tell "not found" from "already exists", the access-denied signal for
 an expired session, and how paging looks in a real reply (the mock server
 can page; a real CMS has not been seen doing it).
@@ -292,8 +293,22 @@ class CmsClient:
             reply = await self.rpc(network, "<action><action-type>show-ont</action-type>"
                                             f"<action-args>{args}{after}</action-args></action>")
             answer = reply.find("action-reply")
-            matches = answer.findall("match/get/object") if answer is not None else []
-            found.extend(to_data(m) for m in matches)
+            matches = []
+            for match in answer.findall("match") if answer is not None else []:
+                # Per CMS NBI documentation, each match carries the ONT twice: its provisioning (serno,
+                # subscr-id, descr, ontprof, linked-pon) under get-config and its state (op-stat,
+                # model, vendor) under get. Read both into one object; a match with only one half
+                # still reads.
+                halves = [o for o in (match.find("get-config/object"), match.find("get/object")) if o is not None]
+                if not halves:
+                    continue
+                merged: Dict[str, Any] = {}
+                for half in halves:
+                    data = to_data(half)
+                    if isinstance(data, dict):
+                        merged.update(data)
+                found.append(merged)
+                matches.append(halves[0])
             if answer is None or answer.find("more") is None:
                 return found
             after = self._after(matches, after)

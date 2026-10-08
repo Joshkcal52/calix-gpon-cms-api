@@ -37,7 +37,20 @@ What the public sources say, and nothing more:
   but the page does not say so, and it shows no XML. The element that
   carries it is still unknown (item 3 below).
 
-What neither source shows, and so this project does NOT know:
+  - CMS NBI documentation for an earlier release (not R15.x) suggests, for
+    items 1 to 3 below: router-side services in ontslot 8 with ontethany the
+    RG number; the router port as type OntRg numbered by <ontrg> (and a
+    full-bridge interface as OntFb in ontslot 9, which can carry services of
+    its own); and an Ethernet port's binding as an <intf> child naming OntRg
+    (router mode) or OntFb (bridge mode), read by INTF_MODES. The WAN
+    protocol (item 4) is set on the OntRg object. That would mean
+    CMS_RG_SERVICE_SLOT=8, CMS_RG_PORT_TYPE=OntRg, CMS_RG_PORT_ID_ELEMENT=ontrg
+    and CMS_RG_PORT_MODE_ELEMENT=intf. They are NOT defaults: they are not
+    from R15.x and the slot is not certain, so set them only after
+    python -m app.tools.cms_check against a real 844G agrees. A port with no
+    <intf> at all still reads as unknown.
+
+Until a real CMS confirms it, this project does NOT know:
 
   1. Which ontslot (and ontethany) value an EthSvc on the router side uses.
   2. Which object type and ID element CMS uses for the router port itself,
@@ -90,6 +103,11 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 
+# What an OntEthGe <intf> binding means, by the <type> it names (CMS NBI documentation): OntRg is the
+# ONT's router (RG), OntFb a full-bridge interface. Any other type is read as unknown, not guessed.
+INTF_MODES = {"OntRg": "router", "OntFb": "bridge"}
+
+
 @dataclass(frozen=True)
 class RouterAddressing:
     service_slot: Optional[str] = None  # <ontslot> of an EthSvc on the router side; <ontethany> is the RG number
@@ -133,6 +151,10 @@ def read_port_mode(addressing: Optional[RouterAddressing], reply: Any) -> str:
     if addressing.port_mode_element not in reply:
         return "unknown"
     value = reply[addressing.port_mode_element]
+    if isinstance(value, dict) and value.get("type") is not None:
+        # <intf> names the interface the port is bound to, by type
+        bound_to = str(value.get("type") or "").strip()
+        return INTF_MODES.get(bound_to, "unknown")
     if isinstance(value, dict):
         value = value.get("#text") or ("set" if any(k for k in value if not k.startswith("@")) else None)
     text = str(value or "").strip().lower()
