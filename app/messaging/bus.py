@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 from collections import deque
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Deque, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from app.models.job_model import Command, JobUpdate
@@ -47,10 +48,12 @@ class BusUnavailableError(Exception):
 class Delivery:
     """One command handed to a worker, plus what the bus needs to acknowledge it"""
 
-    def __init__(self, command: Command, handle: Any = None, attempt: int = 1):
+    def __init__(self, command: Command, handle: Any = None, attempt: int = 1,
+                 queued_at: Optional[datetime] = None):
         self.command = command
         self.handle = handle  # bus-specific (Kafka: topic, partition, offset)
         self.attempt = attempt
+        self.queued_at = queued_at  # when the bus stored it, where the bus says (Kafka: the record timestamp)
 
 
 class CommandConsumer(Protocol):
@@ -116,7 +119,8 @@ class InMemoryBus:
     async def publish_command(self, command: Command) -> None:
         # Round-trip through JSON so anything Kafka could not carry fails here too
         copy = Command.model_validate_json(command.model_dump_json())
-        self._queues.setdefault(copy.lane, deque()).append(Delivery(copy, attempt=0))
+        self._queues.setdefault(copy.lane, deque()).append(
+            Delivery(copy, attempt=0, queued_at=datetime.now(timezone.utc)))
         self._arrived.set()
 
     async def publish_update(self, update: JobUpdate) -> None:

@@ -95,11 +95,14 @@ class JobStore:
         job = record.job
         if update.requested_by and not job.requested_by:
             job.requested_by = update.requested_by
-        if update.status is not None:
+        # A finished job's status is final. A command can run again after its outcome was published
+        # (its acknowledgement lost, or the topic re-read by a new consumer group), and that run's
+        # RUNNING, or the FAILED of a command now too old to run, must not overturn it. The
+        # update still goes in the job's event log below.
+        if update.status is not None and not record.done:
             job.status = update.status
             if update.status == JobStatus.RUNNING:
                 job.started_at = job.started_at or update.timestamp
-                job.finished_at = None  # a retry after a finished attempt
             elif update.status in TERMINAL:
                 job.finished_at = update.timestamp
             job.result = update.result

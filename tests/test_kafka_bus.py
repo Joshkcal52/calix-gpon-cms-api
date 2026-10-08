@@ -58,6 +58,7 @@ class FakeConsumer:
         self.position = 0
         self.actions = []  # ("commit", offset) / ("seek", offset)
         FakeConsumer.last = self
+        FakeConsumer.instances.append(self)
 
     async def start(self):
         pass
@@ -84,9 +85,10 @@ class FakeConsumer:
         self.actions.append(("commit", offset))
 
 
-def record(offset, command=None, value=None):
+def record(offset, command=None, value=None, timestamp=None):
     value = value if value is not None else command.model_dump_json().encode()
-    return SimpleNamespace(topic=TOPIC, partition=0, offset=offset, key=b"NTWK-1", value=value)
+    return SimpleNamespace(topic=TOPIC, partition=0, offset=offset, key=b"NTWK-1", value=value,
+                           timestamp=timestamp if timestamp is not None else int(time.time() * 1000))
 
 
 def make_command(n):
@@ -100,6 +102,7 @@ def bus(monkeypatch):
     monkeypatch.setattr(kafka_bus, "AIOKafkaConsumer", FakeConsumer)
     FakeConsumer.records = []
     FakeConsumer.last = None
+    FakeConsumer.instances = []
     bus = kafka_bus.KafkaBus(SETTINGS)
     asyncio.run(bus.start())
     return bus
@@ -163,6 +166,43 @@ def test_consumer_never_auto_commits_and_workers_share_a_group(bus):
     assert consumer.options["group_id"] == "gpon-cms.workers.provisioning"
     assert consumer.options["auto_offset_reset"] == "earliest"
     assert consumer.options["max_poll_interval_ms"] == 900000
+
+
+def test_each_lane_has_its_own_group_whatever_else_the_worker_serves(bus):
+    # A group per lane list would put a provisioning worker and a provisioning+legacy worker in
+    # different groups, both taking every command, and a new lane list would re-read the topic
+    bus.register_lane("legacy", "legacy-gpon-events", encode=lambda c: b"", decode=lambda raw: None)
+
+    async def scenario():
+        for lanes in (["provisioning"], ["provisioning", "legacy"]):
+            consumer = bus.consume_commands(lanes)
+            await consumer.start()
+            await consumer.stop()
+
+    asyncio.run(scenario())
+    assert [(c.topics, c.options["group_id"]) for c in FakeConsumer.instances] == [
+        ((TOPIC,), "gpon-cms.workers.provisioning"),
+        (("legacy-gpon-events",), "gpon-cms.workers.legacy"),
+        ((TOPIC,), "gpon-cms.workers.provisioning")]
+
+
+def test_a_command_kafka_has_held_too_long_is_not_run_whatever_its_own_time_says(bus):
+    # A new group re-reads the topic from the start. The command's created_at says now (a producer
+    # that left its time out, or a wrong clock), but Kafka stored it two hours ago.
+    two_hours_ago = int((time.time() - 7200) * 1000)
+    FakeConsumer.records = [record(0, make_command(1), timestamp=two_hours_ago)]
+    handled = []
+
+    async def handler(context, payload):
+        handled.append(payload["n"])
+        return {}
+
+    consumer = run_worker(bus, handler, expected_commits=1)
+
+    assert handled == []
+    parked = [s for s in bus._producer.sent if s[1] == "gpon-cms.commands.dlq"]
+    assert len(parked) == 1 and dict(parked[0][4])["error-code"] == b"command_expired"
+    assert [a for a in consumer.actions if a[0] != "stop"] == [("commit", 1)]
 
 
 def test_offset_is_committed_only_after_success(bus):

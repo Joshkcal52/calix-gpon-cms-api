@@ -6,8 +6,8 @@ each command only when its outcome is settled.
 For every command exactly one of these happens:
 
   success             publish the result, then acknowledge (commit the offset)
-  failed for good     publish the error, copy the command to the dead-letter
-                      queue, then acknowledge. Nothing is dropped, and one bad
+  failed for good     copy the command to the dead-letter queue, publish the
+                      error, then acknowledge. Nothing is dropped, and one bad
                       command cannot block the ones behind it.
   failed for now      (CMS down, timeout, breaker open) do NOT acknowledge.
                       Wait, then take the same command again. Work queues up
@@ -123,6 +123,16 @@ def describe_error(exc: BaseException) -> Dict[str, Any]:
     return {"code": "internal_error", "message": f"Unexpected error: {exc}", "retryable": False}
 
 
+def command_age(command: Command, delivery: Delivery) -> float:
+    """
+    Seconds since the command was made, by the earlier of its own time (created_at: the API's
+    clock, or a legacy event's occurred_at) and when the bus stored it. A producer that leaves its
+    time out, or whose clock is wrong, cannot make an old command look new.
+    """
+    times = [t for t in (command.created_at, delivery.queued_at) if t is not None]
+    return (datetime.now(timezone.utc) - min(times)).total_seconds()
+
+
 class Worker:
     def __init__(self, bus: MessageBus, lanes: Sequence[str], handlers: Dict[str, Handler], *,
                  max_command_age: float = 3600.0, retry_backoff: float = 2.0,
@@ -168,14 +178,14 @@ class Worker:
     async def _handle(self, consumer: CommandConsumer, delivery: Delivery) -> None:
         command = delivery.command
         context = JobContext(self._bus, command, delivery.attempt)
-        age = (datetime.now(timezone.utc) - command.created_at).total_seconds()
+        age = command_age(command, delivery)
         expired = age > self.max_command_age
 
         try:
             if expired:
                 raise JobError(
                     "command_expired",
-                    f"This request waited {age / 60:.0f} minutes in the queue, longer than the "
+                    f"This request is {age / 60:.0f} minutes old, older than the "
                     f"{self.max_command_age / 60:.0f} minute limit, so it was not run. "
                     f"Submit it again if it is still wanted.")
             handler = self._handlers.get(command.action)
@@ -210,10 +220,12 @@ class Worker:
                 await self._pause(delay)
                 return
 
+            # Park it before saying it failed: if the park fails, the command runs again and nothing
+            # has yet told the job it failed, so a published outcome is final
+            await consumer.dead_letter(delivery, error)
             await context._publish("error", error["message"], error, status=JobStatus.FAILED, error=error)
             audit.record("failed", command, attempt=delivery.attempt, error_code=error.get("code"),
                          error=error.get("message"))
-            await consumer.dead_letter(delivery, error)
             await consumer.ack(delivery)  # the outcome is recorded, safe to move on
             return
 
