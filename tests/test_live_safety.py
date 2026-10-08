@@ -24,6 +24,8 @@ import pytest
 
 from app.controller.lifecycle_controller import apply_ont_change
 from app.controller.provisioning_controller import activate_ont, service_differences
+from app.messaging.bus import BusUnavailableError
+from app.models.job_model import Command
 from app.models.lifecycle_model import DeleteOnt
 from app.models.provisioning_model import (
     ActivationRequest, Attachment, EthernetService, OntProfile, ProvisionedService
@@ -32,6 +34,7 @@ from app.nbi.breaker import CircuitBreaker
 from app.nbi.errors import NbiConflictError, NbiRejectedError
 from app.nbi.gateway import NbiGateway
 from app.nbi.mock_cms import MOCK_NETWORK, MockCmsBackend
+from app.worker.runner import JobContext
 
 NET = MOCK_NETWORK
 NEW_SERIAL = "CXNK00C4D301"  # discovered, not provisioned, in the simulated CMS
@@ -174,6 +177,23 @@ def test_rollback_leaves_an_ont_another_run_is_provisioning():
         ont = next(o.state for o in backend._onts.values() if o.state.serial_number == NEW_SERIAL)
         assert sorted(s.ont_port for s in ont.services) == [1, 2]
         assert any(m.startswith("Not rolled back") for m in recorder.messages)
+
+    asyncio.run(scenario())
+
+
+def test_rollback_runs_while_the_bus_drops_progress_events():
+    # Kafka refuses the progress events: the rollback still deletes the ONT
+    class DownBus:
+        async def publish_update(self, update):
+            raise BusUnavailableError("Kafka is down")
+
+    async def scenario():
+        gateway, backend = make_gateway()
+        context = JobContext(DownBus(), Command(id="job-1", action="activate", lane="provisioning", key=NET,
+                                                kind="activation", summary="test", payload={}), attempt=1)
+        with pytest.raises(NbiRejectedError, match="NOPE-BW"):
+            await activate_ont(context, gateway, NET, rejected_request(), verify_timeout=0, poll_seconds=0)
+        assert all(o.state.serial_number != NEW_SERIAL for o in backend._onts.values())
 
     asyncio.run(scenario())
 

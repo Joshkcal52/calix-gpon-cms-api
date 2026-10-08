@@ -63,8 +63,15 @@ class JobContext:
         self._pump: Optional[asyncio.Task] = None
 
     async def emit(self, type: str, message: str, /, **data: Any) -> None:
-        """Publish a progress event for this job"""
-        await self._publish(type, message, data)
+        """
+        Publish a progress event for this job. One the bus will not take is dropped with a
+        warning, so a Kafka outage cannot stop CMS work (a rollback above all) halfway. Only the
+        job's status updates, published by the worker, have to land.
+        """
+        try:
+            await self._publish(type, message, data)
+        except BusUnavailableError as e:
+            logger.warning(f"Dropped a progress event for job {self.job_id}: {e.message}")
 
     async def step(self, number: int, total: int, message: str) -> None:
         await self.emit("step", message, step=number, total_steps=total)
@@ -86,9 +93,7 @@ class JobContext:
         while True:
             type, message, data = await self._outbox.get()
             try:
-                await self._publish(type, message, data)
-            except BusUnavailableError as e:
-                logger.warning(f"Dropped a progress event for job {self.job_id}: {e.message}")
+                await self.emit(type, message, **data)
             finally:
                 self._outbox.task_done()
 
