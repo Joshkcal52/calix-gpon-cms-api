@@ -14,7 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Optional
 import logging
 
+from app import audit
 from app.controller.job_controller import JobStore
+from app.controller.provisioning_controller import check_bandwidth_profiles
 from app.dependencies import get_jobs
 from app.legacy.events import event_to_command
 from app.legacy.models import GponSignupEvent, XgsCutoverEvent
@@ -24,6 +26,7 @@ from app.models.provisioning_model import (
     SubscriberId, check_unique_ports, check_unique_services
 )
 from app.routes.job_routes import accepted
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +71,9 @@ async def signup(request: SignupRequest, http_request: Request, network: str = N
     The ONT does not have to be installed yet. CMS holds the configuration
     against the serial number and applies it when the ONT is first seen.
     """
-    event = GponSignupEvent(event_id=new_id(), network=network, **request.model_dump())
+    check_bandwidth_profiles((s.bandwidth_profile for s in request.services), settings.known_bandwidth_profiles())
+    event = GponSignupEvent(event_id=new_id(), network=network, requested_by=audit.caller(http_request),
+                            **request.model_dump())
     logger.info(f"Queueing signup of subscriber {event.subscriber_id} on {network} as job {event.event_id}")
     return accepted(await jobs.submit(event_to_command(event)), http_request)
 
@@ -83,6 +88,7 @@ async def cutover(request: CutoverRequest, http_request: Request, network: str =
     and publishes a migration request for the XGS side. CMS is not changed:
     the legacy ONT stays in service until someone retires it.
     """
-    event = XgsCutoverEvent(event_id=new_id(), network=network, **request.model_dump())
+    event = XgsCutoverEvent(event_id=new_id(), network=network, requested_by=audit.caller(http_request),
+                            **request.model_dump())
     logger.info(f"Queueing cutover of subscriber {event.subscriber_id} on {network} as job {event.event_id}")
     return accepted(await jobs.submit(event_to_command(event)), http_request)

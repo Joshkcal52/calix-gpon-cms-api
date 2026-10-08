@@ -48,7 +48,7 @@ class NbiBackend(Protocol):
 
     async def add_ethernet_service(self, network: str, ont_id: int, service: EthernetService) -> None: ...
 
-    async def delete_ont(self, network: str, ont_id: int) -> None: ...
+    async def delete_ont(self, network: str, ont_id: int, *, force: bool) -> None: ...
 
     async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts: ...
 
@@ -113,9 +113,13 @@ class NbiGateway:
                                 lambda: self.backend.add_ethernet_service(network, ont_id, service),
                                 idempotent=False)
 
-    async def delete_ont(self, network: str, ont_id: int) -> None:
+    async def delete_ont(self, network: str, ont_id: int, *, force: bool) -> None:
+        """
+        Delete an ONT. force=True also deletes everything still on it, including voice services
+        this API cannot see: use it only on an ONT this API has just created.
+        """
         return await self._call("delete_ont",
-                                lambda: self.backend.delete_ont(network, ont_id), idempotent=False)
+                                lambda: self.backend.delete_ont(network, ont_id, force=force), idempotent=False)
 
     async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts:
         """Ethernet ports and the router side of one ONT. Costs one CMS call per port."""
@@ -228,7 +232,7 @@ class NotConfiguredBackend:
     async def add_ethernet_service(self, network: str, ont_id: int, service: EthernetService) -> None:
         raise self._refuse()
 
-    async def delete_ont(self, network: str, ont_id: int) -> None:
+    async def delete_ont(self, network: str, ont_id: int, *, force: bool) -> None:
         raise self._refuse()
 
     async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts:
@@ -306,6 +310,9 @@ def build_gateway(settings: Any) -> NbiGateway:
             timeout=settings.nbi_timeout_seconds, router=router_side_addressing(settings),
             scheme=settings.cms_scheme, verify=settings.cms_verify())
         logger.info(f"CMS backend: {backend.client.url}")
+        if not settings.known_bandwidth_profiles():
+            logger.warning("BANDWIDTH_PROFILES is not set: bandwidth profiles are not checked before a job is "
+                           "queued, so a mistyped one reaches CMS mid-job")
         if settings.cms_scheme == "http":
             logger.warning("CMS_SCHEME is http: the CMS login and every request cross the network unencrypted")
         elif settings.cms_verify() is False:

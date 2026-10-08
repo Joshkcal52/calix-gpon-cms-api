@@ -284,7 +284,7 @@ def test_cms_client_backend_writes_and_escapes_what_it_sends(cms):
         services = (await backend.get_ont(MOCK_NETWORK, 15)).services
         assert [(s.service_index, s.vlan) for s in services] == [(1, 100), (2, 200)]
 
-        await backend.delete_ont(MOCK_NETWORK, 15)
+        await backend.delete_ont(MOCK_NETWORK, 15, force=True)
         with pytest.raises(NbiNotFoundError):
             await backend.get_ont(MOCK_NETWORK, 15)
         await backend.close()

@@ -73,7 +73,11 @@ Two rules keep the boundary sharp:
 
 If CMS rejects a port setting or a service, the ONT created in that run is deleted again. An ONT this run did not create is never deleted. A router-side service on a profile whose `rg` count is 0 is refused before anything is created.
 
-**Lifecycle changes** (`CHANGE_ONT`): enable or disable a port or a service, change a port (subscriber ID, security profile, description), change a service (bandwidth profile, tag action, VLAN, peak-rate overrides), delete a service, delete an ONT. Each reads CMS first and sends only what is still different, so a repeat finds nothing to do. Deleting an ONT needs its serial number and refuses if the ONT ID now holds another one; it refuses an ONT that still has services unless `force=true`. Each change is one CMS write, so nothing needs undoing.
+**Lifecycle changes** (`CHANGE_ONT`): enable or disable a port or a service, change a port (subscriber ID, security profile, description), change a service (bandwidth profile, tag action, VLAN, peak-rate overrides), delete a service, delete an ONT. Each reads CMS first and sends only what is still different, so a repeat finds nothing to do. Deleting an ONT needs its serial number and refuses if the ONT ID now holds another one; it refuses an ONT that still has services unless `force=true`. Because voice is not read, it also refuses an ONT whose profile has voice ports (or whose count cannot be read) unless `voice_checked=true` says someone has checked it in CMS. With `force`, the data services are deleted one by one first; the ONT itself is always deleted without CMS's force, so CMS refuses it if anything is left on it (a voice service, or a service added since the read) instead of removing it unseen. That CMS refuses such a delete is assumed: `python -m app.tools.lab_cycle` checks it. Only a rollback deletes with CMS's force, and only the ONT that activation created. Each other change is one CMS write, so nothing needs undoing.
+
+**Running an activation again** adds the services that are missing and changes a bound service whose bandwidth profile, tag action or peak rates differ from the request (an empty peak rate means `none`), so a re-sent signup with a new speed tier is applied rather than reported as done. The VLAN is part of a service's identity, so a new VLAN is a new service.
+
+**Bandwidth profiles** are checked against `BANDWIDTH_PROFILES` (a list copied from CMS; this API cannot read them) before an activation, signup or service change is queued, and again by the worker for signups that arrive on the events topic. Without the list, a mistyped profile reaches CMS mid-job, or a valid but wrong ID applies another speed tier. In `MOCK_MODE` the simulated CMS's list is used.
 
 **Lookups**: `GET /ont-profiles` (with port counts and router count) and `GET /vlans`.
 
@@ -207,6 +211,6 @@ Inferred, not verified, because nobody on this project has a real CMS:
 - **Encryption.** Set `CMS_SCHEME=https` (and the HTTPS port) if your CMS offers it: with the default `http` the CMS login crosses the network unencrypted. Kafka is plaintext with no credentials.
 - **Paging and HTTPS have only met the mock.** If `cms_check` lists fewer ONTs than CMS holds, or HTTPS fails against a real CMS, start there.
 - **API keys** are shared secrets in an environment variable. Browsers' EventSource cannot send them, so a browser following a job's SSE stream needs a proxy that adds the key.
-- **Job history** is rebuilt from the updates topic on start, so it is bounded by that topic's retention.
+- **Job history** is rebuilt from the updates topic on start, so it is bounded by that topic's retention. **Who asked for each change** is kept on the job (`requested_by`, the API key's name) and in one JSON line per accepted, succeeded and failed change on the `gpon_cms.audit` logger (and `AUDIT_LOG_PATH` if set): ship those lines somewhere that keeps them. See `app/audit.py`.
 - **Dead letters** are parked with their error; there is no tool yet to list or replay them.
 - **One breaker per process.** Workers do not share breaker state.

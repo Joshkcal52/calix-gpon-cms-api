@@ -93,6 +93,8 @@ It is the second column of the services CSV. The export and the plan count the f
 
 The `XGS_CUTOVER` event (`POST /networks/{network}/cutovers`) does not carry voice either, and its migration request has no voice flag yet.
 
+Deleting an ONT whose profile has voice ports needs `voice_checked=true`: someone has checked in CMS that it carries no voice service to keep. The ONT itself is deleted without CMS's force, so a voice service still on it should make CMS refuse the delete rather than lose the line.
+
 ## Command-line tools
 
 ```bash
@@ -186,12 +188,15 @@ Workers commit a Kafka offset only once a command has succeeded or its failure h
 
 ## Tests
 
+In a virtualenv, so the pinned versions are the ones tested:
+
 ```bash
+python -m venv venv && . venv/bin/activate      # Windows PowerShell: python -m venv venv; .\venv\Scripts\Activate.ps1
 pip install -r requirements-test.txt
-pytest
+python -m pytest
 ```
 
-Run on Python 3.10 and 3.12. The tests run every CMS operation through the CMS client over SOAP (HTTP and HTTPS) against the mock CMS server, check it sends the same requests cms-nbi-client did, and the queue rules over the Kafka wire protocol against an in-process Kafka mock.
+CI (`.github/workflows/tests.yml`) runs the same on Linux with Python 3.10 and 3.12 on every push and pull request. The tests run every CMS operation through the CMS client over SOAP (HTTP and HTTPS) against the mock CMS server, check it sends the same requests cms-nbi-client did, and the queue rules over the Kafka wire protocol against an in-process Kafka mock.
 
 ## Project layout
 
@@ -220,6 +225,7 @@ config.py       settings
 - [docs/E7_CLI.md](docs/E7_CLI.md): provisioning through each E7's command line, and what is unverified
 - [docs/CUTOVER.md](docs/CUTOVER.md): what the cutover tools hand to the XGS side, and what to know before relying on them
 - [docs/SIM_RESULTS.md](docs/SIM_RESULTS.md): 32 and 64 simulated customers on both backends, with fault injection
+- [docs/KNOWN_UNKNOWNS.md](docs/KNOWN_UNKNOWNS.md): every open risk, guess and gap in one place, who owns the CMS work, the license question, and how the code was written
 - [deploy/demo/README.md](deploy/demo/README.md): the multi-process demo
 
 ## Credits

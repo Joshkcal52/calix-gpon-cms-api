@@ -4,7 +4,7 @@ Configuration settings for gpon-cms
 
 import os
 from pathlib import Path
-from typing import List, Literal, Optional, Union
+from typing import FrozenSet, List, Literal, Optional, Union
 from pydantic_settings import BaseSettings
 
 
@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     cms_rg_port_type: Optional[str] = None
     cms_rg_port_id_element: Optional[str] = None
     cms_rg_port_mode_element: Optional[str] = None  # read-only: an Ethernet port's bridge/router mode
+    # The bandwidth profiles a service may use, comma-separated, exactly as CMS names them (numeric IDs
+    # on a real CMS), e.g. BANDWIDTH_PROFILES=17,18,22. Anything else is refused before a job is queued,
+    # so a typo cannot reach CMS mid-job or pick a valid but wrong speed tier. Empty: not checked here
+    # (the simulated CMS's own list in MOCK_MODE). This API cannot list them from CMS.
+    bandwidth_profiles: Optional[str] = None
 
     # --- E7 command line (for a CMS without the NBI licence) ---
     # Provision through each E7 EXA node's own CLI over SSH instead of CMS. See app/nbi/e7_backend.py.
@@ -124,12 +129,23 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+    audit_log_path: Optional[str] = None  # also append the audit trail (app/audit.py) to this file, as JSON lines
 
     def cms_verify(self) -> Union[bool, str]:
         """What the CMS client checks the server's certificate against: a CA file, the system's CAs, or nothing"""
         if not self.cms_verify_tls:
             return False
         return self.cms_ca_file or True
+
+    def known_bandwidth_profiles(self) -> Optional[FrozenSet[str]]:
+        """The bandwidth profiles services may use, or None if they are not checked here"""
+        listed = frozenset(p.strip() for p in (self.bandwidth_profiles or "").split(",") if p.strip())
+        if listed:
+            return listed
+        if self.mock_mode:
+            from app.nbi.mock_cms import MOCK_BANDWIDTH_PROFILES
+            return frozenset(MOCK_BANDWIDTH_PROFILES)
+        return None
 
     def run_embedded_worker(self) -> bool:
         if self.worker_embedded is not None:

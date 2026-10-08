@@ -192,23 +192,24 @@ def test_port_lifecycle_including_the_router_port(api):
 
 
 def test_ont_delete_checks_the_serial_and_the_services(api):
-    url = f"{BASE}/onts/3"
-    wrong = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F104"}))
-    assert wrong["error"]["code"] == "conflict" and "not CXNK00A3F104" in wrong["error"]["message"]
-    busy = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F103"}))
-    assert busy["error"]["code"] == "conflict" and "2 service(s)" in busy["error"]["message"]
+    url = f"{BASE}/onts/4"
+    wrong = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F105"}))
+    assert wrong["error"]["code"] == "conflict" and "not CXNK00A3F105" in wrong["error"]["message"]
+    busy = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F104"}))
+    assert busy["error"]["code"] == "conflict" and "1 service(s)" in busy["error"]["message"]
     assert api.get(url).status_code == 200
 
-    deleted = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F103", "force": "true"}))
-    assert deleted["result"] == {"network": NET, "ont_id": 3, "op": "delete_ont", "deleted": True,
-                                 "serial_number": "CXNK00A3F103", "services_removed": 2}
+    deleted = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F104", "force": "true",
+                                                  "voice_checked": "true"}))
+    assert deleted["result"] == {"network": NET, "ont_id": 4, "op": "delete_ont", "deleted": True,
+                                 "serial_number": "CXNK00A3F104", "services_removed": 1}
     assert api.get(url).status_code == 404
-    again = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F103", "force": "true"}))
+    again = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F104", "force": "true"}))
     assert again["status"] == "succeeded" and again["result"]["already_absent"] is True
 
     # The ID is gone but the serial lives on elsewhere: refuse rather than report success
-    elsewhere = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F104"}))
-    assert elsewhere["error"]["code"] == "conflict" and "is ONT 4" in elsewhere["error"]["message"]
+    elsewhere = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F105"}))
+    assert elsewhere["error"]["code"] == "conflict" and "is ONT 5" in elsewhere["error"]["message"]
 
 
 # --- The CMS client against the mock NBI server (real SOAP over HTTP) ---------------------
@@ -375,11 +376,17 @@ def test_lifecycle_changes_through_the_real_client_are_repeat_safe(cms):
 
         with pytest.raises(NbiConflictError, match="1 service"):
             await apply(DeleteOnt(serial_number="CXNK00A3F103"))
-        assert (await apply(DeleteOnt(serial_number="CXNK00A3F103", force=True)))["deleted"] is True
-        assert (await apply(DeleteOnt(serial_number="CXNK00A3F103", force=True)))["already_absent"] is True
+        with pytest.raises(NbiConflictError, match="may carry voice"):
+            await apply(DeleteOnt(serial_number="CXNK00A3F103", force=True))
+        server.app.state.cms._onts[3].voice_lines = 0  # someone checked, and removed the phone line
+        assert (await apply(DeleteOnt(serial_number="CXNK00A3F103", force=True, voice_checked=True)))["deleted"]
+        assert (await apply(DeleteOnt(serial_number="CXNK00A3F103", force=True, voice_checked=True)))[
+            "already_absent"] is True
 
-        sent = [(e["operation"], e["type"]) for e in edits(server)]
-        assert sent == [("merge", "OntEthGe"), ("merge", "EthSvc"), ("delete", "EthSvc"), ("delete", "Ont")]
+        sent = [(e["operation"], e["type"], e.get("force")) for e in edits(server)]
+        # The remaining service is deleted on its own, then the ONT without CMS's force
+        assert sent == [("merge", "OntEthGe", None), ("merge", "EthSvc", None), ("delete", "EthSvc", False),
+                        ("delete", "EthSvc", False), ("delete", "Ont", False)]
         await gateway.close()
 
     asyncio.run(scenario())

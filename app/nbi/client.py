@@ -182,6 +182,11 @@ class CmsClient:
                 self.url, content=body.encode("ascii", "xmlcharrefreplace"),
                 headers={"Content-Type": "text/xml;charset=ISO-8859-1",
                          "User-Agent": f"CMS_NBI_CONNECT-{self.username}"})
+        except httpx.ConnectTimeout:
+            # Nothing was sent, so unlike a timeout after connecting, a write cannot have been applied.
+            # (On Windows a refused connection ends here too: it retries instead of failing at once.)
+            raise NbiConnectionError(f"Could not connect to CMS at {self.host}:{self.port} (no connection "
+                                     f"within {self.timeout:g} seconds). Nothing was sent.") from None
         except httpx.TimeoutException:
             raise NbiTimeoutError(f"CMS did not answer within {self.timeout:g} seconds.") from None
         except httpx.HTTPError as e:

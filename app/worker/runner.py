@@ -28,6 +28,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence
 
+from app import audit
 from app.messaging.bus import BusUnavailableError, CommandConsumer, Delivery, MessageBus
 from app.models.job_model import Command, JobStatus, JobUpdate
 
@@ -104,7 +105,7 @@ class JobContext:
         await self._bus.publish_update(JobUpdate(
             job_id=self.job_id, kind=self.command.kind, summary=self.command.summary,
             type=type, message=message, data=data or None,
-            status=status, result=result, error=error))
+            status=status, result=result, error=error, requested_by=self.command.requested_by))
 
 
 Handler = Callable[[JobContext, Dict[str, Any]], Awaitable[Optional[Dict[str, Any]]]]
@@ -205,6 +206,8 @@ class Worker:
                 return
 
             await context._publish("error", error["message"], error, status=JobStatus.FAILED, error=error)
+            audit.record("failed", command, attempt=delivery.attempt, error_code=error.get("code"),
+                         error=error.get("message"))
             await consumer.dead_letter(delivery, error)
             await consumer.ack(delivery)  # the outcome is recorded, safe to move on
             return
@@ -213,6 +216,7 @@ class Worker:
         # again and the (repeat-safe) handler reports success a second time.
         await context._publish("result", f"Finished: {command.summary}", result,
                                status=JobStatus.SUCCEEDED, result=result)
+        audit.record("succeeded", command, attempt=delivery.attempt, result=result)
         await consumer.ack(delivery)
 
     async def _pause(self, seconds: float) -> None:

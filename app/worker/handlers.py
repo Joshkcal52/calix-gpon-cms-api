@@ -24,11 +24,13 @@ def build_handlers(settings: Any, gateway: NbiGateway, bus: MessageBus) -> Dict[
         return await activate_ont(
             context, gateway, payload["network"], request,
             verify_timeout=settings.activation_verify_timeout_seconds,
-            poll_seconds=settings.activation_poll_seconds)
+            poll_seconds=settings.activation_poll_seconds,
+            bandwidth_profiles=settings.known_bandwidth_profiles())
 
     async def handle_change_ont(context: JobContext, payload: Dict[str, Any]) -> Dict[str, Any]:
         change = OntChangeAdapter.validate_python(payload["change"])
-        return await apply_ont_change(context, gateway, payload["network"], int(payload["ont_id"]), change)
+        return await apply_ont_change(context, gateway, payload["network"], int(payload["ont_id"]), change,
+                                      bandwidth_profiles=settings.known_bandwidth_profiles())
 
     return {
         ACTION_ACTIVATE_ONT: handle_activate_ont,

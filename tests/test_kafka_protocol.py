@@ -55,6 +55,7 @@ def kafka(cluster):
         legacy_events_topic=f"{prefix}.legacy-gpon-events",
         xgs_migration_topic=f"{prefix}.xgs-migration-requests",
         legacy_profile_map_path=app_settings.legacy_profile_map_path,
+        known_bandwidth_profiles=lambda: None,
         activation_verify_timeout_seconds=1, activation_poll_seconds=0.01)
 
 

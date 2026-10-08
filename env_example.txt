@@ -13,6 +13,8 @@ RELOAD=false
 
 # Logging
 LOG_LEVEL=INFO
+# Who asked for each change is logged on "gpon_cms.audit" as JSON lines; set this to also append them to a file
+# AUDIT_LOG_PATH=/var/log/gpon-cms/audit.jsonl
 
 # --- Queue and workers (see docs/ARCHITECTURE.md) ---
 # Leave empty to queue inside the API process. Set to use Kafka.
@@ -58,6 +60,9 @@ LOG_LEVEL=INFO
 # E7_PAGER_COMMAND=set session pager disabled
 # E7_SERVICE_NAMES=Data1,Data2,Data3,Data4,Data5,Data6,Data7,Data8
 
+# The bandwidth profile IDs services may use, comma-separated. Anything else is refused before it is
+# queued. This API cannot list them from CMS, so copy them from CMS. Empty: not checked.
+# BANDWIDTH_PROFILES=17,18,22
 # Topic the worker reads signup and cutover events from
 # LEGACY_EVENTS_TOPIC=legacy-gpon-events
 # Topic cutovers publish migration requests to (your XGS/SMx topic, once the schema matches)

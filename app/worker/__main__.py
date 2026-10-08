@@ -13,6 +13,7 @@ import asyncio
 import logging
 import signal
 
+from app import audit
 from app.messaging.bus import build_bus
 from app.nbi.gateway import build_gateway
 from app.worker.handlers import build_handlers
@@ -28,6 +29,7 @@ async def main() -> None:
                          "without it the API runs its own embedded worker.")
     lanes = settings.worker_lane_list()
     settings.check_worker_timeouts(lanes)
+    audit.configure(settings.audit_log_path)
 
     bus = build_bus(settings)
     gateway = build_gateway(settings)

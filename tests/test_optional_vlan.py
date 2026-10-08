@@ -291,7 +291,7 @@ def test_activation_without_a_vlan_over_soap_is_repeat_safe(nbi_server):
         assert (service.vlan, service.bandwidth_profile) == (None, "VOICE")
 
         # The simulation's rule holds over SOAP too, and the failed activation deletes the ONT it created
-        await gateway.delete_ont(NET, first["ont_id"])
+        await gateway.delete_ont(NET, first["ont_id"], force=True)
         bad = ActivationRequest(serial_number=SERIAL, profile="844G-1", wait_for_online=False,
                                 require_discovery=False, services=[EthernetService(**untagged(vlan=100))])
         with pytest.raises(NbiRejectedError, match="takes no outer VLAN"):

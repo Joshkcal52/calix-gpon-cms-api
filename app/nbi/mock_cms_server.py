@@ -305,8 +305,11 @@ def _describe(auth: Optional[ElementTree.Element], rpc: Optional[ElementTree.Ele
         return {"kind": "action", "type": _text(rpc, "./action/action-type")}
     if _has(rpc, "./edit-config"):
         target = rpc.find("./edit-config//config/top/object")
-        return {"kind": "edit", "operation": target.get("operation", "merge") if target is not None else "",
-                "type": _text(target, "./type")}
+        described = {"kind": "edit", "operation": target.get("operation", "merge") if target is not None else "",
+                     "type": _text(target, "./type")}
+        if described["operation"] == "delete":
+            described["force"] = target.get("force") == "true"
+        return described
     target = rpc.find(".//top/object")
     return {"kind": "get", "type": _text(target, "./type"), "children": _text(target, "./children/type")}
 
@@ -451,7 +454,7 @@ async def _handle_edit(network: str, edit: ElementTree.Element) -> str:
     if object_type == "Ont":
         ont_id = _int(_text(target, "./id/ont") or "0", "ONT ID")
         if operation == "delete":
-            await cms.delete_ont(network, ont_id)
+            await cms.delete_ont(network, ont_id, force=target.get("force") == "true")
             return "<ok/>"
         if operation == "create":
             serno = _text(target, "./serno")

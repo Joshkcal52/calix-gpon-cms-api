@@ -40,6 +40,9 @@ class _EventBase(BaseModel):
     occurred_at: datetime = Field(default_factory=_now)
     network: NetworkName
     subscriber_id: SubscriberId
+    requested_by: Optional[str] = Field(
+        None, max_length=64, description="Who asked for this. The API sets its API key's name; another producer "
+                                         "on the topic may name itself here (it is trusted, not checked)")
 
     @field_validator("occurred_at")
     @classmethod

@@ -45,7 +45,8 @@ def build_legacy_handlers(settings: Any, gateway: NbiGateway, bus: MessageBus) -
         result = await activate_ont(
             context, gateway, event.network, request,
             verify_timeout=settings.activation_verify_timeout_seconds,
-            poll_seconds=settings.activation_poll_seconds)
+            poll_seconds=settings.activation_poll_seconds,
+            bandwidth_profiles=settings.known_bandwidth_profiles())
         return {**result, "subscriber_id": event.subscriber_id}
 
     async def handle_cutover(context: JobContext, payload: Dict[str, Any]) -> Dict[str, Any]:

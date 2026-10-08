@@ -21,6 +21,7 @@ from app.routes import (
 )
 
 # Import services for the v2 integration layer
+from app import audit
 from app.auth import ApiAuthError, check_configuration, require_api_key
 from app.controller.job_controller import JobStore
 from app.messaging.bus import BusUnavailableError, build_bus
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
     as separate pods) an embedded worker.
     """
     check_configuration(settings)
+    audit.configure(settings.audit_log_path)
     bus = build_bus(settings)
     await bus.start()
     gateway_settings, mock_e7_server = await start_mock_e7_if_needed(settings)
