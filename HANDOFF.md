@@ -41,7 +41,7 @@ In the export, ONTs 3, 4, 7 and others are 844Gs whose ports all run as bridges:
 - **Voice is not read at all.** The voice status comes from the profile's `pots` attribute, whose meaning as a port count is inferred (`cms_check` prints its raw values).
 - SMx parameter names come from the IDI billing docs, not from SMx. All mapping files hold demo values. The Kubernetes manifests have never been applied.
 
-- **The E7 CLI backend (for a CMS without the NBI) has never met a real E7.** Its commands come from Calix's public E7 EXA R3.x CLI reference, but Calix shows no sample output, so its parsers, the prompt and the error wording are guesses that the mock E7 shares. Run `python -m app.tools.e7_capture` (show commands only) and fix the parsers against real captures before any write. See `docs/E7_CLI.md`.
+- **The E7 CLI backend (for a CMS without the NBI) has never met a real E7.** Its commands come from Calix's public E7 EXA R3.x CLI reference, but Calix shows sample output for only one table (show mcast, whose dashed-line layout the table parser follows), so its parsers, the prompt and the error wording are guesses that the mock E7 shares. Run `python -m app.tools.e7_capture` (show commands only) and fix the parsers against real captures before any write. See `docs/E7_CLI.md`.
 
 ## First three things to do with a real CMS
 

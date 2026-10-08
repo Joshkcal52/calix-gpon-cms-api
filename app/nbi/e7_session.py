@@ -11,6 +11,11 @@ A session that times out or loses its connection mid-command is thrown away,
 not reused: what the E7 prints next could belong to the abandoned command.
 The next command logs in again.
 
+A session the E7 closed while idle between commands (its inactivity
+timeout) is found before the next command is sent: that command logs in
+again and is sent once on the new session. A session lost after a command
+was sent is never retried, because the command may have run.
+
 The prompt pattern and the pager command are settings because they are not
 verified against a real E7 (see E7_PROMPT_PATTERN and E7_PAGER_COMMAND).
 """
@@ -28,6 +33,10 @@ logger = logging.getLogger(__name__)
 # Paging prompts answered with a space, in case the pager command is not accepted
 MORE_PROMPTS = re.compile(r"(--More--|--more--|<--- More --->|Press any key to continue)\s*$")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+class NotSent(NbiConnectionError):
+    """The session was gone before the command could be written, so the E7 never saw it"""
 
 
 @dataclass
@@ -57,9 +66,23 @@ class E7Session:
         """Run one command and return what it printed, without the echoed command or the prompt"""
         async with self._lock:
             try:
-                if self._process is None:
+                if self._process is not None and self._closed():
+                    logger.info(f"E7 {self.node.name} closed the idle SSH session; logging in again")
+                    await self._drop()
+                reused = self._process is not None
+                if not reused:
                     await self._open()
-                return await self._exchange(command)
+                try:
+                    return await self._exchange(command)
+                except NotSent:
+                    # The session went while idle and nothing was sent: log in again and try once more.
+                    # Once a command is sent, a lost session is never retried: the command may have run.
+                    if not reused:
+                        raise
+                    logger.info(f"E7 {self.node.name} closed the idle SSH session; logging in again")
+                    await self._drop()
+                    await self._open()
+                    return await self._exchange(command)
             except BaseException:
                 # Timed out, cancelled or disconnected: the session's state is unknown
                 await self._drop()
@@ -101,8 +124,16 @@ class E7Session:
         logger.info(f"SSH session open to E7 {self.node.name}")
 
     async def _exchange(self, command: str) -> str:
-        self._process.stdin.write(command + "\n")
+        """Send one command and read its output. Every command goes through here (e7_capture guards it)."""
+        try:
+            self._process.stdin.write(command + "\n")
+        except (BrokenPipeError, ConnectionError) as e:
+            raise NotSent(f"E7 {self.node.name} closed the SSH session.") from e
         return _clean(await self._read_until_prompt(), command)
+
+    def _closed(self) -> bool:
+        """The E7 ended the session (an idle timeout, say) since the last command"""
+        return self._process.is_closing() or self._process.stdout.at_eof()
 
     async def _read_until_prompt(self) -> str:
         buffer = ""

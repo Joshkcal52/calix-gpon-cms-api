@@ -176,7 +176,7 @@ Two requests always differed from the library's, on purpose: its Ethernet port u
 
 ## The E7 CLI backend
 
-For a CMS without the NBI licence, `app/nbi/e7_backend.py` provisions through each E7's command line over SSH (`app/nbi/e7_session.py`: one session per E7, one command at a time, dropped after a timeout). It implements the same `NbiBackend` protocol, so the gateway and everything above it are unchanged. Command output is read by the lenient parsers in `app/nbi/e7_parse.py`, which are unverified because Calix publishes no sample output. Details, settings and the checklist are in [E7_CLI.md](E7_CLI.md).
+For a CMS without the NBI licence, `app/nbi/e7_backend.py` provisions through each E7's command line over SSH (`app/nbi/e7_session.py`: one session per E7, one command at a time, dropped after a timeout, logged in again if the E7 closed it while idle). It implements the same `NbiBackend` protocol, so the gateway and everything above it are unchanged. Command output is read by the lenient parsers in `app/nbi/e7_parse.py`, which are unverified because Calix publishes almost no sample output. Details, settings and the checklist are in [E7_CLI.md](E7_CLI.md).
 
 ## What is verified, and what is not
 

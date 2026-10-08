@@ -4,9 +4,11 @@ A stand-in for an E7 EXA node's command line, for testing the E7 CLI
 backend (app/nbi/e7_backend.py) over real SSH.
 
 The commands it accepts follow Calix's public E7 EXA R3.x CLI reference.
-WHAT IT PRINTS IS INVENTED: Calix publishes no sample output, so the layouts
-below ("Label: value" for detail views, dash-ruled tables for lists, "Error:"
-for refusals) are this project's guess. Passing tests against this mock says
+WHAT IT PRINTS IS MOSTLY INVENTED: Calix publishes almost no sample output.
+Its lists are tables laid out like the one sample in the E7 CLI reference
+(show mcast): header words one space apart, and a line of dashes under the
+header, one run per column, columns one space apart. The detail views
+("Label : value") and the refusals ("Error: ...") are this project's guess. Passing tests against this mock says
 the backend and the mock agree, not that a real E7 prints this. Replace the
 layouts with captures from a real E7 (python -m app.tools.e7_capture).
 
@@ -42,6 +44,9 @@ class MockE7:
         self.present: Dict[str, Tuple[str, str]] = {
             "00A3F104": ("844G", "1/1/1"), "00B2C201": ("812G", "1/1/2"), "00C0FFEE": ("716GE-I", "1/2/1")}
         self.commands: List[str] = []
+        self.idle_timeout: Optional[float] = None  # seconds before an idle session is closed, as a real E7 can
+        self.hang_up_on: Optional[str] = None  # a command start: the session closes on it, unanswered
+        self.logins = 0
         self._create(101, "812G-1", "00B2C201", "SUB-1001", "Smith residence")
         self.services[101] = [{"port": "g1", "name": "Data1", "bw": "RES-1G", "ta": "ADD-OUTER", "outer": "100",
                                "inner": "none", "admin": "enabled", "desc": ""}]
@@ -87,12 +92,29 @@ class MockE7:
             if w[3] == "detail":
                 return "\n\n".join(self._port_detail(ont, p) for p in self._ont_ports(ont))
         if w[:2] == ["show", "ont-profile"] and len(w) == 2:
-            return _table(["Name", "Model", "Ports", "Capabilities"],
-                          [[n, m, p, c or "-"] for n, (m, p, c) in PROFILES.items()])
+            # A column per port type (Calix's M&T guide: 'the "G" (RG) and "F" (FB) Ports columns')
+            letters = ["g", "p", "G", "F"]
+            counts = {n: {c[-1]: c[:-1] for c in p.split()} for n, (_, p, _) in PROFILES.items()}
+            return _table(["Name", "Model"] + letters + ["Capabilities"],
+                          [[n, m] + [counts[n].get(x, "0") for x in letters] + [c or "-"]
+                           for n, (m, _, c) in PROFILES.items()])
         if w[:2] == ["show", "vlan"] and len(w) == 2:
             return _table(["VLAN", "Name"], [[str(v), n] for v, n in VLANS.items()])
         if w[:2] == ["create", "ont"] and len(w) >= 3:
             return self._create_cmd(w[2], _options(w[3:]))
+        if w[:2] == ["set", "ont"] and len(w) >= 3:
+            ont = self._ont(w[2])
+            for key, val in _options(w[3:]).items():
+                if key == "pon-port" and val == "none":
+                    self.onts[ont]["linked"] = ""
+                elif key in ("subscriber-id", "description"):
+                    self._check_length(key, val)
+                    self.onts[ont][{"subscriber-id": "subscriber"}.get(key, key)] = val
+                elif key == "admin-state" and val in ("enabled", "no-alarms", "disabled"):
+                    self.onts[ont]["admin"] = val
+                else:
+                    raise _Refused(f"Invalid input detected at '^' marker ({key}).")
+            return ""
         if w[:2] == ["delete", "ont"] and len(w) in (3, 4):
             ont = self._ont(w[2])
             if w[3:] != ["forced"] and (self.services.get(ont)):
@@ -118,6 +140,8 @@ class MockE7:
                 for key, val in _options(w[5:]).items():
                     field = {"bw-profile": "bw", "svc-tag-action": "ta", "outer-vlan": "outer",
                              "admin-state": "admin"}.get(key)
+                    if field == "admin":
+                        self._check_admin(val)
                     if field is None:
                         raise _Refused(f"Invalid input detected at '^' marker ({key}).")
                     self._check(field, val)
@@ -127,6 +151,8 @@ class MockE7:
             for key, val in _options(w[3:]).items():
                 if key not in ("admin-state", "description", "subscriber-id", "eth-sec-profile"):
                     raise _Refused(f"Invalid input detected at '^' marker ({key}).")
+                if key == "admin-state":
+                    self._check_admin(val)
                 settings[key] = val
             return ""
         raise _Refused("Invalid input detected at '^' marker.")
@@ -135,7 +161,7 @@ class MockE7:
 
     def _create(self, ont: int, profile: str, serial: str, subscriber: str, description: str) -> None:
         self.onts[ont] = {"profile": profile, "serial": serial, "subscriber": subscriber,
-                          "description": description, "admin": "enabled"}
+                          "description": description, "admin": "enabled", "linked": serial}
 
     def _create_cmd(self, ont_text: str, opts: Dict[str, str]) -> str:
         if not ont_text.isdigit() or not 1 <= int(ont_text) <= 64000000:
@@ -148,8 +174,8 @@ class MockE7:
         serial = opts.get("serial-number", "").upper()
         if any(o["serial"] == serial for o in self.onts.values()):
             raise _Refused(f"Serial number {serial} is already in use.")
-        if len(opts.get("description", "")) > 47:
-            raise _Refused("Description is limited to 47 characters.")
+        for key in ("subscriber-id", "description"):
+            self._check_length(key, opts.get(key, ""))
         self._create(ont, opts["profile"], serial, opts.get("subscriber-id", ""), opts.get("description", ""))
         return ""
 
@@ -159,6 +185,10 @@ class MockE7:
             raise _Refused(f"Service name {name} does not exist.")
         if any((s["port"], s["name"]) == (port, name) for s in self.services.get(ont, [])):
             raise _Refused(f"Service {name} already exists on {port_text}.")
+        if port.startswith("G") and sum(s["port"] == port for s in self.services.get(ont, [])) >= 4:
+            raise _Refused(f"{port_text} already has the most services a residential gateway port takes.")
+        if "admin-state" in opts:
+            self._check_admin(opts["admin-state"])
         for field, key in (("bw", "bw-profile"), ("ta", "svc-tag-action")):
             if key not in opts:
                 raise _Refused(f"{key} is required.")
@@ -173,6 +203,17 @@ class MockE7:
             "admin": opts.get("admin-state", "enabled"), "desc": opts.get("description", "")})
         return ""
 
+    @staticmethod
+    def _check_admin(val: str) -> None:
+        if val not in ("enabled", "disabled"):  # no-alarms is for the ONT, not its ports or services
+            raise _Refused(f"Invalid input detected at '^' marker ({val}).")
+
+    @staticmethod
+    def _check_length(key: str, val: str) -> None:
+        most = {"subscriber-id": 63, "description": 47}[key]
+        if len(val) > most:
+            raise _Refused(f"{key} is limited to {most} characters.")
+
     def _check(self, field: str, val: str) -> None:
         if field == "bw" and val not in BW_PROFILES:
             raise _Refused(f"Bandwidth profile {val} does not exist.")
@@ -185,7 +226,7 @@ class MockE7:
 
     def _ont_detail(self, ont: int) -> str:
         o = self.onts[ont]
-        model, pon = self.present.get(o["serial"], (PROFILES[o["profile"]][0], None))
+        model, pon = self.present.get(o["linked"], (PROFILES[o["profile"]][0], None))
         return _detail([("ONT", str(ont)), ("Profile", o["profile"]), ("Serial Number", f"CXNK{o['serial']}"),
                         ("Subscriber ID", o["subscriber"] or "-"), ("Description", o["description"] or "-"),
                         ("Admin State", o["admin"]), ("Oper State", "present" if pon else "missing"),
@@ -235,8 +276,9 @@ def _detail(pairs: List[Tuple[str, str]]) -> str:
 
 
 def _table(header: List[str], rows: List[List[str]]) -> str:
+    """Laid out like show mcast in Calix's E7 CLI reference: one space between columns, dashes under each"""
     widths = [max(len(c) for c in col) for col in zip(header, *rows)]
-    line = lambda cells: "  ".join(c.ljust(w) for c, w in zip(cells, widths)).rstrip()
+    line = lambda cells: " ".join(c.ljust(w) for c, w in zip(cells, widths)).rstrip()
     return "\n".join([line(header), line(["-" * w for w in widths])] + [line(r) for r in rows])
 
 
@@ -260,14 +302,22 @@ async def serve(port: int = 0, *, username: str = "e7", password: str = "e7",
             return (user, pw) == (username, password)
 
     async def shell(process: "asyncssh.SSHServerProcess") -> None:
+        e7.logins += 1
         process.stdout.write(f"Calix E7 (mock)\n{PROMPT}")
         try:
             while True:
-                line = await process.stdin.readline()
+                try:
+                    line = await asyncio.wait_for(process.stdin.readline(), e7.idle_timeout)
+                except asyncio.TimeoutError:
+                    process.stdout.write("\nSession timed out.\n")
+                    break
                 if not line:
                     break
                 command = line.strip()
                 if command in ("exit", "logout", "quit"):
+                    break
+                if e7.hang_up_on and command.startswith(e7.hang_up_on):
+                    e7.commands.append(command)
                     break
                 output = e7.run(command) if command else ""
                 process.stdout.write((output + "\n" if output else "") + PROMPT)

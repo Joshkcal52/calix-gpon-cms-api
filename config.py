@@ -67,8 +67,8 @@ class Settings(BaseSettings):
     # python -m app.tools.e7_capture before provisioning.
     e7_prompt_pattern: str = r"\S+[>#] ?"  # the whole last line of output when the E7 is waiting
     e7_pager_command: str = "set session pager disabled"
-    e7_session_commands: str = "set session alarm-notif disabled,set session event-notif disabled,set session tca-notif disabled"
-    e7_error_pattern: str = (r"(?i)(\berror\b|invalid input|\binvalid\b|failed|cannot|can't|not allowed|denied|"
+    e7_session_commands: str = "set session timeout disabled,set session alarm-notif disabled,set session event-notif disabled,set session tca-notif disabled"
+    e7_error_pattern: str = (r"(?i)(\berror\b|invalid input|\binvalid\b|\bfail(?:ed|ure|s)?\b|cannot|can't|not allowed|denied|"
                              r"does not exist|doesn't exist|not found|no such|already exists|in use|unknown)")
     # Service names, in service_index order: show eth-svc-name on the E7 lists the real ones
     e7_service_names: str = "Data1,Data2,Data3,Data4,Data5,Data6,Data7,Data8"

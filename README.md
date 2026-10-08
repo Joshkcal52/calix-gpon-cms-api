@@ -120,7 +120,7 @@ Before the first change on a real CMS, know that:
 
 ## Without the CMS NBI: the E7 command line
 
-If your CMS has no NBI licence, the API can provision through each E7 EXA's own CLI over SSH instead. Set `E7_NODES` (each name becomes a `{network}`) in place of `CMS_HOST`. Everything above the backend works the same. The commands follow Calix's public E7 EXA CLI reference, but Calix publishes no sample output, so the parsers are unverified. Run the read-only capture first:
+If your CMS has no NBI licence, the API can provision through each E7 EXA's own CLI over SSH instead. Set `E7_NODES` (each name becomes a `{network}`) in place of `CMS_HOST`. Everything above the backend works the same. The commands follow Calix's public E7 EXA CLI reference, but Calix publishes almost no sample output, so the parsers are unverified. Run the read-only capture first:
 
 ```bash
 export E7_NODES=OLT-04=10.0.0.4 E7_USERNAME=... E7_PASSWORD=... NBI_TIMEOUT_SECONDS=30

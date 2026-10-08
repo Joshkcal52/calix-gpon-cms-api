@@ -92,6 +92,55 @@ def test_tables_are_read_by_column_position_including_empty_and_right_aligned_ce
         {"ont": "10002", "serial-number": "CXNK00B2C201", "subscriber-id": "SUB-7", "profile": "812G-1"}]
 
 
+def test_the_show_mcast_sample_in_calix_cli_reference_parses_by_its_dashed_line():
+    """
+    The one table Calix prints in the E7 CLI reference (#220-00652 Rev. 10, show mcast). The header and
+    the dashed line are as printed: header words are one space apart within a column and between columns,
+    so only the dashes say where a column starts. The PDF's text wraps the rows; they are laid out here
+    under the dashes as the header and rule place them.
+    """
+    text = ("VLAN Multicast Group Interfaces, OLT Ports and ERPS Domains\n"
+            "---- --------------- ---------------------------------------------------------\n"
+            "25   224.0.0.5       traffic\n"
+            "25   224.0.0.6       traffic\n"
+            "25   225.1.1.1       12/g1, 13/1, traffic\n"
+            "25   239.255.5.3     12/g1, 13/1, traffic\n")
+    rows = parse.table(text)
+    assert rows[0] == {"outer-vlan": "25", "multicast-group": "224.0.0.5",
+                       "interfaces-olt-ports-and-erps-domains": "traffic"}
+    assert [r["multicast-group"] for r in rows] == ["224.0.0.5", "224.0.0.6", "225.1.1.1", "239.255.5.3"]
+    assert rows[3]["interfaces-olt-ports-and-erps-domains"] == "12/g1, 13/1, traffic"
+
+
+def test_the_same_sample_with_unpadded_rows_is_read_word_by_word():
+    """
+    The E7 OS R3.1-3.2 Maintenance and Troubleshooting Guide prints the show mcast sample with its rows one
+    space apart, not under the dashes. Whether the E7 or the typesetting did that is not known.
+    """
+    text = ("VLAN Multicast Group Interfaces, OLT Ports and ERPS Domains\n"
+            "---- --------------- ---------------------------------------------------------\n"
+            "25 224.0.0.5 traffic_domain\n"
+            "25 225.1.1.1 12/g1, 13/1, traffic_domain\n")
+    assert parse.table(text) == [
+        {"outer-vlan": "25", "multicast-group": "224.0.0.5", "interfaces-olt-ports-and-erps-domains": "traffic_domain"},
+        {"outer-vlan": "25", "multicast-group": "225.1.1.1",
+         "interfaces-olt-ports-and-erps-domains": "12/g1, 13/1, traffic_domain"}]
+
+
+def test_ont_profile_port_columns_keep_g_and_G_apart():
+    """Calix's M&T guide: 'review the "G" (RG) and "F" (FB) Ports columns'. G is the RG, g is Gigabit Ethernet."""
+    text = ("Name   g p G F\n"
+            "------ - - - -\n"
+            "844G-1 4 2 1 0\n")
+    [row] = parse.table(text)
+    assert parse.port_columns(row) == {"g": 4, "p": 2, "G": 1, "F": 0}
+    assert parse.unrecognised([row]) == []
+
+
+def test_without_a_dashed_line_header_words_two_spaces_apart_are_columns():
+    assert parse.table("ONT  Serial Number\n101  CXNK00A3F104") == [{"ont": "101", "serial-number": "CXNK00A3F104"}]
+
+
 def test_profile_port_letters_follow_calix_legend():
     # f=fast-eth, g=gig-eth, p=pots, G=residential gateway, F=full bridge
     assert parse.port_counts("4g 2p 1G") == {"g": 4, "p": 2, "G": 1}
@@ -168,7 +217,8 @@ def test_reads(e7):
         finally:
             await backend.close()
         # The session was set up once, with the pager and notifications off
-        assert mock.commands[:4] == ["set session pager disabled", "set session alarm-notif disabled",
+        assert mock.commands[:5] == ["set session pager disabled", "set session timeout disabled",
+                                     "set session alarm-notif disabled",
                                      "set session event-notif disabled", "set session tca-notif disabled"]
         assert sent(mock) == []
 
@@ -193,11 +243,12 @@ def test_writes_send_the_documented_commands(e7):
             await backend.update_service(NET, 2001, Attachment.ETHERNET, 1, 1, ServiceChange(
                 bandwidth_profile="VOICE", admin_state="disabled"))
             await backend.update_port(NET, 2001, Attachment.ETHERNET, 2, PortChange(
-                description="Office desk", admin_state="enabled-no-alarms"))
+                description="Office desk", admin_state="disabled"))
             await backend.delete_service(NET, 2001, Attachment.ETHERNET, 2, 1)
             services = (await backend.get_ont(NET, 2001)).services
-            assert [(s.attachment, s.ont_port, s.bandwidth_profile, s.admin_state) for s in services] == [
-                (Attachment.ETHERNET, 1, "VOICE", "disabled"), (Attachment.ROUTER, 1, "RES-1G", "enabled")]
+            assert sorted((s.attachment.value, s.ont_port, s.bandwidth_profile, s.admin_state, s.description)
+                          for s in services) == [
+                ("ethernet", 1, "VOICE", "disabled", "internet"), ("router", 1, "RES-1G", "enabled", None)]
             ports = await backend.get_ont_ports(NET, 2001)
             assert [p.port for p in ports.ethernet] == ["eth1", "eth2", "eth3", "eth4"]
             assert ports.ethernet[1].description == "Office desk"
@@ -213,9 +264,13 @@ def test_writes_send_the_documented_commands(e7):
             "description internet",
             "add eth-svc Data1 to-ont-port 2001/g2 bw-profile RES-1G svc-tag-action ADD-OUTER outer-vlan 100",
             "add eth-svc Data1 to-ont-port 2001/G1 bw-profile RES-1G svc-tag-action MOCK-NO-VLAN",
-            "set ont-port 2001/g1 eth-svc Data1 bw-profile VOICE admin-state disabled",
-            'set ont-port 2001/g2 admin-state no-alarms description "Office desk"',
+            # A service change removes the service and adds it again, keeping what it does not change
+            "remove eth-svc Data1 from-ont-port 2001/g1",
+            "add eth-svc Data1 to-ont-port 2001/g1 bw-profile VOICE svc-tag-action ADD-OUTER outer-vlan 100 "
+            "description internet admin-state disabled",
+            'set ont-port 2001/g2 admin-state disabled description "Office desk"',
             "remove eth-svc Data1 from-ont-port 2001/g2",
+            "set ont 2001 pon-port none",
             "delete ont 2001 forced"]
 
     asyncio.run(scenario())
@@ -234,6 +289,118 @@ def test_a_second_service_on_a_port_takes_the_next_name(e7):
         finally:
             await backend.close()
         assert sent(mock)[-1].startswith("add eth-svc Data2 to-ont-port 101/g1 ")
+
+    asyncio.run(scenario())
+
+
+def test_no_alarms_is_refused_for_ports_and_services_before_anything_is_sent(e7):
+    """Calix: set ont-port and add eth-svc take admin-state enabled or disabled; no-alarms is for the ONT"""
+    port, mock = e7
+
+    async def scenario():
+        backend = backend_for(port)
+        try:
+            with pytest.raises(NbiRejectedError, match="port's admin state"):
+                await backend.update_port(NET, 101, Attachment.ETHERNET, 1, PortChange(admin_state="enabled-no-alarms"))
+            with pytest.raises(NbiRejectedError, match="service's admin state"):
+                await backend.update_service(NET, 101, Attachment.ETHERNET, 1, 1,
+                                             ServiceChange(admin_state="enabled-no-alarms"))
+        finally:
+            await backend.close()
+        assert sent(mock) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_service_change_is_safe_to_run_twice_and_a_refused_one_puts_the_service_back(e7):
+    port, mock = e7
+
+    async def scenario():
+        backend = backend_for(port)
+        try:
+            change = ServiceChange(vlan=200)
+            await backend.update_service(NET, 101, Attachment.ETHERNET, 1, 1, change)
+            count = len(sent(mock))
+            await backend.update_service(NET, 101, Attachment.ETHERNET, 1, 1, change)
+            assert len(sent(mock)) == count == 2  # remove and add; the second run sent nothing
+
+            with pytest.raises(NbiNotFoundError, match="Bandwidth profile"):
+                await backend.update_service(NET, 101, Attachment.ETHERNET, 1, 1,
+                                             ServiceChange(bandwidth_profile="NOPE"))
+            [service] = (await backend.get_ont(NET, 101)).services
+            assert (service.vlan, service.bandwidth_profile) == (200, "RES-1G")
+        finally:
+            await backend.close()
+        assert sent(mock)[2:] == [
+            "remove eth-svc Data1 from-ont-port 101/g1",
+            "add eth-svc Data1 to-ont-port 101/g1 bw-profile NOPE svc-tag-action ADD-OUTER outer-vlan 200 "
+            "admin-state enabled",
+            "add eth-svc Data1 to-ont-port 101/g1 bw-profile RES-1G svc-tag-action ADD-OUTER outer-vlan 200 "
+            "admin-state enabled"]
+
+    asyncio.run(scenario())
+
+
+def test_a_residential_gateway_port_takes_four_services(e7):
+    port, mock = e7
+
+    async def scenario():
+        backend = backend_for(port)
+        try:
+            await backend.create_ont(NET, OntSpec(serial_number="CXNK00A3F104", profile="844G-1", ont_id=2002))
+            for _ in range(4):
+                await backend.add_ethernet_service(NET, 2002, EthernetService(
+                    bandwidth_profile="RES-1G", tag_action="MOCK-NO-VLAN", attach_to="router"))
+            count = len(sent(mock))
+            with pytest.raises(NbiConflictError, match="at most 4"):
+                await backend.add_ethernet_service(NET, 2002, EthernetService(
+                    bandwidth_profile="RES-1G", tag_action="MOCK-NO-VLAN", attach_to="router"))
+            assert len(sent(mock)) == count
+        finally:
+            await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_ethernet_port_takes_eight_services_whatever_e7_service_names_holds(e7):
+    """Calix, System Support Capacities: 8 services on an ONT Ethernet port"""
+    port, mock = e7
+
+    async def scenario():
+        backend = E7CliBackend([E7Node(NET, "127.0.0.1", port, "e7", "e7", known_hosts="none")],
+                               service_names=[f"Data{n}" for n in range(1, 11)])
+        try:
+            for _ in range(7):  # ONT 101 already has one
+                await backend.add_ethernet_service(NET, 101, EthernetService(
+                    vlan=100, bandwidth_profile="RES-1G", tag_action="ADD-OUTER"))
+            count = len(sent(mock))
+            with pytest.raises(NbiConflictError, match="at most 8"):
+                await backend.add_ethernet_service(NET, 101, EthernetService(
+                    vlan=100, bandwidth_profile="RES-1G", tag_action="ADD-OUTER"))
+            assert len(sent(mock)) == count
+        finally:
+            await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_ont_field_lengths_are_checked_before_sending(e7):
+    """Calix, create ont: subscriber ID 1-63 characters, description 1-47"""
+    port, mock = e7
+
+    async def scenario():
+        backend = backend_for(port)
+        try:
+            with pytest.raises(NbiRejectedError, match="at most 47"):
+                await backend.create_ont(NET, OntSpec(serial_number="CXNK00C0FFEE", profile="812G-1", ont_id=8,
+                                                      description="x" * 48))
+            with pytest.raises(NbiRejectedError, match="at most 63"):
+                await backend.create_ont(NET, OntSpec.model_construct(
+                    serial_number="CXNK00C0FFEE", profile="812G-1", ont_id=8, subscriber_id="s" * 64,
+                    description=None))
+        finally:
+            await backend.close()
+        assert sent(mock) == []
 
     asyncio.run(scenario())
 
@@ -305,6 +472,43 @@ def test_a_command_cut_short_drops_the_session_and_the_next_one_logs_in_again(e7
         finally:
             await backend.close()
         assert mock.commands.count("set session pager disabled") == 2
+
+    asyncio.run(scenario())
+
+
+def test_a_session_the_e7_closed_while_idle_logs_in_again_and_sends_the_command_once(e7):
+    port, mock = e7
+
+    async def scenario():
+        backend = backend_for(port)
+        mock.idle_timeout = 0.5  # read by the mock as each wait for a command starts
+        try:
+            await backend.get_ont(NET, 101)
+            await asyncio.sleep(1.2)  # the mock closes the idle session ("Session timed out.")
+            before = len(mock.commands)
+            await backend.update_port(NET, 101, Attachment.ETHERNET, 1, PortChange(description="Den"))
+        finally:
+            mock.idle_timeout = None
+            await backend.close()
+        assert mock.logins == 2
+        assert sent(mock, before) == ["set ont-port 101/g1 description Den"]
+
+    asyncio.run(scenario())
+
+
+def test_a_session_lost_after_a_command_was_sent_is_not_retried(e7):
+    port, mock = e7
+
+    async def scenario():
+        backend = backend_for(port)
+        mock.hang_up_on = "create ont"
+        try:
+            with pytest.raises(NbiConnectionError):
+                await backend.create_ont(NET, OntSpec(serial_number="CXNK00C0FFEE", profile="812G-1", ont_id=9))
+        finally:
+            await backend.close()
+        assert mock.logins == 1 and [c for c in mock.commands if c.startswith("create ont")] == [
+            "create ont 9 profile 812G-1 serial-number 00C0FFEE"]
 
     asyncio.run(scenario())
 

@@ -2,7 +2,7 @@
 Read-only E7 capture
 Saves what a real E7 EXA prints for every show command the E7 CLI backend
 (app/nbi/e7_backend.py) reads, and shows what the backend's parsers make of
-it. Calix publishes no sample output, so these captures are the only way to
+it. Calix publishes almost no sample output, so these captures are the only way to
 check the parsers before the backend changes anything.
 
     export E7_NODES=OLT-04=10.0.0.4 E7_USERNAME=... E7_PASSWORD=...

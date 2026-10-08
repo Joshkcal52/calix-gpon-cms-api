@@ -10,19 +10,18 @@ hosts). Each node gets one SSH session; its commands run one at a time.
 
 The commands are those of Calix's public E7 EXA R3.x CLI reference:
   create ont <id> profile <p> serial-number <sn> [subscriber-id|description|admin-state]
-  set ont <id> ...            delete ont <id> [forced]
+  set ont <id> pon-port none  delete ont <id> [forced]
   show ont <id> detail        show ont detail        show ont discovered detail
   show ont serial-number <sn> show ont subscriber-id <s>
   add eth-svc <name> to-ont-port <ont>/g<n> bw-profile <bw> svc-tag-action <ta> [outer-vlan ...]
-  set ont-port <ont>/g<n> eth-svc <name> [bw-profile|svc-tag-action|outer-vlan|admin-state]
-  remove eth-svc <name> from-ont-port <ont>/g<n>
+  remove eth-svc <name> from-ont-port <ont>/g<n>   (a service change is a remove and an add)
   show ont-port <ont> eth-svc   show ont-port <ont> detail   set ont-port <ont>/g<n> ...
   show ont-profile              show vlan
 ONT ports are <ont>/g<n> for Gigabit Ethernet and <ont>/G<n> for the
 residential gateway (router side), per the same reference.
 
 NOT VERIFIED AGAINST A REAL E7. The commands' syntax is documented; what they
-print is not (Calix shows no sample output), so every reply is read by the
+print mostly is not (Calix's one sample is a show mcast table), so every reply is read by the
 lenient parsers in app/nbi/e7_parse.py. Also not documented, and so settings
 or guesses here: the prompt, how a refused command reads (E7_ERROR_PATTERN),
 the service names an E7 uses (E7_SERVICE_NAMES), and which state words mean
@@ -40,7 +39,7 @@ created here appears in CMS before relying on CMS screens.
 import logging
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from app.models.provisioning_model import (
     Attachment, DiscoveredOnt, EthernetService, OntPorts, OntProfile, OntSpec, OntState, OperState,
@@ -58,15 +57,19 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PROMPT = r"\S+[>#] ?"
 DEFAULT_PAGER_COMMAND = "set session pager disabled"
-# Keep alarms and events from landing in the middle of a command's output
-DEFAULT_SESSION_COMMANDS = ("set session alarm-notif disabled", "set session event-notif disabled",
-                            "set session tca-notif disabled")
-# The one CLI error Calix documents is "Invalid input detected at '^' marker". The rest is a guess.
-DEFAULT_ERROR_PATTERN = (r"(?i)(\berror\b|invalid input|\binvalid\b|failed|cannot|can't|not allowed|denied|"
+# Keep alarms and events from landing in the middle of a command's output, and turn the session's
+# inactivity timeout off (set session timeout enabled|disabled; 30 minutes when on). An open-source E7 test
+# library (DarcyChang/MyProjects, Teststeplib_e7.py) turns the same three off at login.
+DEFAULT_SESSION_COMMANDS = ("set session timeout disabled", "set session alarm-notif disabled",
+                            "set session event-notif disabled", "set session tca-notif disabled")
+# The one CLI error Calix documents is "Invalid input detected at '^' marker". The rest is a guess, apart
+# from "fail" and "not found", which the same test library checks for in real E7 replies.
+DEFAULT_ERROR_PATTERN = (r"(?i)(\berror\b|invalid input|\binvalid\b|\bfail(?:ed|ure|s)?\b|cannot|can't|not allowed|denied|"
                          r"does not exist|doesn't exist|not found|no such|already exists|in use|unknown)")
 NOT_FOUND = re.compile(r"(?i)(does not exist|doesn't exist|not found|no such|not provisioned)")
 CONFLICT = re.compile(r"(?i)(already exists|already in use|in use|duplicate|exists)")
-# Service names: UNVERIFIED. E7s name services (show eth-svc-name lists them); Data1..Data8 is a guess.
+# Service names: E7s name services (show eth-svc-name lists them). Data1..Data8 is not confirmed for your
+# E7s, but open-source scripts written against real E7s use Data1 to Data5 the same way.
 DEFAULT_SERVICE_NAMES = tuple(f"Data{n}" for n in range(1, 9))
 # ONT state words read as "up". Inferred; the raw words seen are kept in `observed`.
 ONLINE_WORDS = {"present", "up", "online", "enabled", "enable", "in-service", "is", "active", "ranged", "working"}
@@ -74,6 +77,13 @@ ONLINE_WORDS = {"present", "up", "online", "enabled", "enable", "in-service", "i
 # A CLI argument may not contain anything that could end the command or start another one
 UNSAFE = re.compile(r'["\x00-\x1f\x7f;]')
 CLI_MAX_LINE = 4000  # Calix: "a maximum of 4k characters for a single paste operation"
+# create ont / set ont: "subscriber ID. This is a 1-63 character text string", "description ... 1-47 character"
+ONT_SUBSCRIBER_ID_MAX = 63
+ONT_DESCRIPTION_MAX = 47
+# Services allowed per ONT interface. Calix, E-Series EXA R3.x Turn-Up and Transport Guide, System
+# Support Capacities: "8 on an ONT Ethernet port, 4 on an ONT RG interface, 1 on an ONT FB interface".
+# This backend adds services to g (Ethernet) and G (RG) ports only.
+MAX_SERVICES = {Attachment.ETHERNET: 8, Attachment.ROUTER: 4}
 
 
 class UnknownE7Error(NbiNotFoundError):
@@ -89,6 +99,13 @@ def arg(value: object) -> str:
     if not text:
         raise NbiRejectedError("An empty value cannot be sent on the E7 command line.")
     return f'"{text}"' if " " in text else text
+
+
+def limited(value: str, what: str, most: int) -> str:
+    """A value the E7 limits in length, refused here rather than by the E7"""
+    if len(value) > most:
+        raise NbiRejectedError(f"The E7 takes at most {most} characters for {what}; {value!r} has {len(value)}.")
+    return value
 
 
 def e7_serial(serial_number: str) -> str:
@@ -193,7 +210,9 @@ class E7CliBackend:
             name = parse.value(row, "name") or parse.value(row, "profile")
             if not name:
                 continue
-            counts = parse.port_counts(parse.value(row, "ports"))
+            # A column per port type, as Calix's M&T guide describes ("the G (RG) and F (FB) Ports columns"),
+            # or, failing that, one cell listing them ("4g 2p 1G")
+            counts = parse.port_columns(row) or parse.port_counts(parse.value(row, "ports"))
             caps = (parse.value(row, "capabilities") or "").split()
             profiles.append(OntProfile(
                 id=name, name=name, model=parse.value(row, "model"), vendor=parse.value(row, "vendor"),
@@ -220,9 +239,9 @@ class E7CliBackend:
         command = (f"create ont {ont_id} profile {arg(spec.profile)} "
                    f"serial-number {arg(e7_serial(spec.serial_number))}")
         if spec.subscriber_id:
-            command += f" subscriber-id {arg(spec.subscriber_id)}"
+            command += f" subscriber-id {arg(limited(spec.subscriber_id, 'an ONT subscriber ID', ONT_SUBSCRIBER_ID_MAX))}"
         if spec.description:
-            command += f" description {arg(spec.description)}"
+            command += f" description {arg(limited(spec.description, 'an ONT description', ONT_DESCRIPTION_MAX))}"
         await self._change(network, command)
         created = await self._ont_detail(network, ont_id)
         if created is None:
@@ -233,46 +252,73 @@ class E7CliBackend:
         if not service.tag_action:
             raise NbiRejectedError(f"Service on VLAN {service.vlan} has no tag_action. The E7 needs a service "
                                    f"tag action (svc-tag-action) for every Ethernet service.")
+        if service.us_pir_override or service.ds_pir_override:
+            raise NbiNotVerifiedError("Peak-rate overrides have no documented E7 CLI parameter on add eth-svc. "
+                                      "Nothing was sent. Use a bandwidth profile with the rate instead.")
         attachment = Attachment(service.attach_to)
         port = self._ont_port(ont_id, attachment, service.ont_port)
         used = {s.service_index for s in await self._services(network, ont_id)
                 if (s.attachment, s.ont_port) == (attachment, service.ont_port)}
+        if len(used) >= MAX_SERVICES[attachment]:
+            where = "an RG interface" if attachment == Attachment.ROUTER else "an ONT Ethernet port"
+            raise NbiConflictError(f"ONT port {port} already has {len(used)} services; the E7 allows at most "
+                                   f"{MAX_SERVICES[attachment]} on {where}.")
         free = [i for i in range(1, len(self.service_names) + 1) if i not in used]
         if not free:
             raise NbiConflictError(f"ONT port {port} already has a service under every name in E7_SERVICE_NAMES.")
-        command = (f"add eth-svc {arg(self.service_names[free[0] - 1])} to-ont-port {port} "
-                   f"bw-profile {arg(service.bandwidth_profile)} svc-tag-action {arg(service.tag_action)}")
-        if service.vlan is not None:
-            command += f" outer-vlan {service.vlan}"
-        if service.description:
-            command += f" description {arg(service.description)}"
-        if service.us_pir_override or service.ds_pir_override:
-            raise NbiNotVerifiedError("Peak-rate overrides have no documented E7 CLI parameter on add eth-svc. "
-                                      "Nothing was sent. Use a bandwidth profile with the rate instead.")
-        await self._change(network, command)
+        await self._change(network, _add_command(
+            self.service_names[free[0] - 1], port, bw_profile=service.bandwidth_profile,
+            tag_action=service.tag_action, outer_vlan=service.vlan, description=service.description))
 
     async def update_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
                              service_index: int, change: ServiceChange) -> None:
+        """
+        Removes the service and adds it again under the same name with the new
+        values, rather than set ont-port ... eth-svc, whose sub-options the CLI
+        reference does not lay out clearly. Every value read back that add
+        eth-svc takes is carried over. If the add is refused, the old service is
+        added back before the refusal is raised.
+        """
         if change.us_pir_override or change.ds_pir_override:
             raise NbiNotVerifiedError("Peak-rate overrides have no documented E7 CLI parameter. Nothing was sent.")
-        port = self._ont_port(ont_id, attachment, ont_port)
-        command = f"set ont-port {port} eth-svc {arg(await self._service_name(network, ont_id, attachment, ont_port, service_index))}"
-        parts = []
-        if change.bandwidth_profile:
-            parts.append(f"bw-profile {arg(change.bandwidth_profile)}")
-        if change.tag_action:
-            parts.append(f"svc-tag-action {arg(change.tag_action)}")
-        if change.vlan is not None:
-            parts.append(f"outer-vlan {change.vlan}")
         if change.admin_state:
-            parts.append(f"admin-state {_admin(change.admin_state)}")
-        if not parts:
+            _service_admin(change.admin_state)
+        port = self._ont_port(ont_id, attachment, ont_port)
+        current, row = await self._find_service(network, ont_id, attachment, ont_port, service_index)
+        name = self._name_of(current, ont_id)
+        keep = dict(bw_profile=current.bandwidth_profile, tag_action=current.tag_action, outer_vlan=current.vlan,
+                    inner_vlan=current.inner_vlan, description=current.description,
+                    mcast_profile=parse.value(row, "mcast-profile"), pon_cos=parse.value(row, "pon-cos"),
+                    admin_state=current.admin_state.lower())
+        new = dict(keep)
+        for key, value in (("bw_profile", change.bandwidth_profile), ("tag_action", change.tag_action),
+                           ("outer_vlan", change.vlan), ("admin_state", change.admin_state)):
+            if value is not None:
+                new[key] = value
+        if new == keep:
             return
-        await self._change(network, f"{command} {' '.join(parts)}")
+        if not keep["bw_profile"] or not keep["tag_action"]:
+            raise NbiRejectedError(f"Service {service_index} on {port} reads back without a bandwidth profile or tag "
+                                   f"action, so it could not be added back if the change failed. Nothing was sent.")
+        # All three commands are built, and so checked, before anything is sent
+        remove = f"remove eth-svc {arg(name)} from-ont-port {port}"
+        add = _add_command(name, port, **new)
+        restore = _add_command(name, port, **keep)
+        await self._change(network, remove)
+        try:
+            await self._change(network, add)
+        except NbiError:
+            try:
+                await self._change(network, restore)
+            except NbiError as e:
+                logger.error(f"E7 {network}: service {name} on {port} was removed, its change was refused, "
+                             f"and adding it back failed too: {e}")
+            raise
 
     async def delete_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
                              service_index: int) -> None:
-        name = await self._service_name(network, ont_id, attachment, ont_port, service_index)
+        current, _ = await self._find_service(network, ont_id, attachment, ont_port, service_index)
+        name = self._name_of(current, ont_id)
         await self._change(network, f"remove eth-svc {arg(name)} from-ont-port {self._ont_port(ont_id, attachment, ont_port)}")
 
     async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,
@@ -286,7 +332,7 @@ class E7CliBackend:
             raise NbiRejectedError("Only the admin state of a router port can be changed.")
         parts = []
         if "admin_state" in values:
-            parts.append(f"admin-state {_admin(values['admin_state'])}")
+            parts.append(f"admin-state {_port_admin(values['admin_state'])}")
         if "description" in values:
             parts.append(f"description {arg(values['description'])}")
         if "subscriber_id" in values:
@@ -297,7 +343,9 @@ class E7CliBackend:
             await self._change(network, f"set ont-port {port} {' '.join(parts)}")
 
     async def delete_ont(self, network: str, ont_id: int) -> None:
-        # Calix: "forced - Deletes the ONT, even if ports are non-default or services exist"
+        # Unlink it from its PON first (Calix, set ont: "pon-port ... none to unlink this ONT from the current
+        # physical location"), then "forced - Deletes the ONT, even if ports are non-default or services exist"
+        await self._change(network, f"set ont {ont_id} pon-port none")
         await self._change(network, f"delete ont {ont_id} forced")
 
     async def close(self) -> None:
@@ -370,6 +418,10 @@ class E7CliBackend:
         return next(n for n in range(1, len(used) + 2) if n not in used)
 
     async def _services(self, network: str, ont_id: int) -> List[ProvisionedService]:
+        return [service for service, _ in await self._service_rows(network, ont_id)]
+
+    async def _service_rows(self, network: str, ont_id: int) -> List[Tuple[ProvisionedService, Dict[str, str]]]:
+        """Each service, with the row it was read from"""
         try:
             output = await self._show(network, f"show ont-port {ont_id} eth-svc")
         except UnknownE7Error:
@@ -389,27 +441,30 @@ class E7CliBackend:
             else:
                 extra += 1  # a name outside E7_SERVICE_NAMES: readable, numbered from 101 in listed order
                 index = extra
-            services.append(ProvisionedService(
+            services.append((ProvisionedService(
                 service_index=index, ont_port=number, ont_slot=letter,
                 attachment={"g": Attachment.ETHERNET, "G": Attachment.ROUTER}.get(letter, Attachment.UNKNOWN),
                 vlan=parse.number(row, "outer-vlan"), inner_vlan=parse.number(row, "inner-vlan"),
                 bandwidth_profile=parse.value(row, "bw-profile"), tag_action=parse.value(row, "svc-tag-action"),
-                admin_state=parse.value(row, "admin-state") or "enabled", description=parse.value(row, "description")))
+                admin_state=parse.value(row, "admin-state") or "enabled", description=parse.value(row, "description")),
+                row))
         return services
 
-    async def _service_name(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
-                            service_index: int) -> str:
-        """The E7's name for a service, read back so a service outside E7_SERVICE_NAMES is found too"""
-        for service in await self._services(network, ont_id):
+    async def _find_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
+                            service_index: int) -> Tuple[ProvisionedService, Dict[str, str]]:
+        """A service as read back, so a service outside E7_SERVICE_NAMES is found too"""
+        for service, row in await self._service_rows(network, ont_id):
             if (service.attachment, service.ont_port, service.service_index) == (
                     Attachment(attachment), ont_port, service_index):
-                if service_index <= len(self.service_names):
-                    return self.service_names[service_index - 1]
-                break
-        else:
-            raise NbiNotFoundError(f"ONT {ont_id} has no service {service_index} on {port_name(attachment, ont_port)}.")
-        raise NbiRejectedError(f"Service {service_index} on ONT {ont_id} has a name outside E7_SERVICE_NAMES; "
-                               f"change it on the E7 or add its name to E7_SERVICE_NAMES.")
+                return service, row
+        raise NbiNotFoundError(f"ONT {ont_id} has no service {service_index} on {port_name(attachment, ont_port)}.")
+
+    def _name_of(self, service: ProvisionedService, ont_id: int) -> str:
+        """The E7's name for a service read back"""
+        if service.service_index <= len(self.service_names):
+            return self.service_names[service.service_index - 1]
+        raise NbiRejectedError(f"Service {service.service_index} on ONT {ont_id} has a name outside "
+                               f"E7_SERVICE_NAMES; change it on the E7 or add its name to E7_SERVICE_NAMES.")
 
     def _ont_port(self, ont_id: int, attachment: Attachment, number: int) -> str:
         attachment = Attachment(attachment)
@@ -460,8 +515,42 @@ def _port(text: Optional[str]) -> Optional[tuple]:
     return (match.group(1), int(match.group(2))) if match else None
 
 
-def _admin(state: str) -> str:
-    return {"enabled-no-alarms": "no-alarms"}.get(state, state)
+def _port_admin(state: str) -> str:
+    """Calix, set ont-port: admin-state "Valid values: enabled, disabled". no-alarms is for the ONT itself."""
+    if state not in ("enabled", "disabled"):
+        raise NbiRejectedError(f"An ONT port's admin state on the E7 is enabled or disabled, not {state}. "
+                               f"Nothing was sent.")
+    return state
+
+
+def _service_admin(state: str) -> str:
+    """Calix, add eth-svc and set ont-port eth-svc: admin-state "Valid values: enabled, disabled" """
+    if state not in ("enabled", "disabled"):
+        raise NbiRejectedError(f"A service's admin state on the E7 is enabled or disabled, not {state}. "
+                               f"Nothing was sent.")
+    return state
+
+
+def _add_command(name: str, port: str, *, bw_profile: str, tag_action: str, outer_vlan: Optional[int] = None,
+                 inner_vlan: Optional[int] = None, description: Optional[str] = None,
+                 mcast_profile: Optional[str] = None, pon_cos: Optional[str] = None,
+                 admin_state: Optional[str] = None) -> str:
+    """add eth-svc <name> to-ont-port <port> bw-profile <bw> svc-tag-action <ta> [outer-vlan inner-vlan
+    mcast-profile description pon-cos admin-state], per Calix's syntax line"""
+    command = f"add eth-svc {arg(name)} to-ont-port {port} bw-profile {arg(bw_profile)} svc-tag-action {arg(tag_action)}"
+    if outer_vlan is not None:
+        command += f" outer-vlan {int(outer_vlan)}"
+    if inner_vlan is not None:
+        command += f" inner-vlan {int(inner_vlan)}"
+    if mcast_profile:
+        command += f" mcast-profile {arg(mcast_profile)}"
+    if description:
+        command += f" description {arg(description)}"
+    if pon_cos:
+        command += f" pon-cos {arg(pon_cos)}"
+    if admin_state is not None:
+        command += f" admin-state {_service_admin(admin_state)}"
+    return command
 
 
 def nodes_from_settings(settings) -> List[E7Node]:

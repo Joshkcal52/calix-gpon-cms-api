@@ -27,33 +27,37 @@ The commands are taken from Calix's public E7 EXA R3.x CLI reference and GPON ap
 | Create an ONT | `create ont <id> profile <p> serial-number <sn> [subscriber-id <s>] [description "<d>"]` |
 | Add a service | `add eth-svc <name> to-ont-port <id>/g<n> bw-profile <bw> svc-tag-action <ta> [outer-vlan <v>] [description <d>]` |
 | Router-side service (844G) | the same command on `<id>/G<n>`: Calix designates the residential gateway "G1" |
-| Change a service | `set ont-port <id>/g<n> eth-svc <name> [bw-profile ...] [svc-tag-action ...] [outer-vlan ...] [admin-state ...]` |
+| Change a service | `remove eth-svc <name> from-ont-port <id>/g<n>`, then `add eth-svc` with the same name and the new values. Every value read back that `add eth-svc` takes (VLANs, description, multicast profile, PON CoS, admin state) is carried over. If the E7 refuses the add, the old service is added back and the refusal is reported |
 | Remove a service | `remove eth-svc <name> from-ont-port <id>/g<n>` |
 | Change a port | `set ont-port <id>/g<n> [admin-state ...] [description ...] [subscriber-id ...] [eth-sec-profile ...]` |
-| Delete an ONT | `delete ont <id> forced` (the API itself still refuses unless no services remain or `force=true`) |
+| Delete an ONT | `set ont <id> pon-port none` (unlink it from its PON: Calix's M&T guide says an ONT can only be deleted when its record is not linked to a discovered ONT), then `delete ont <id> forced` (the API itself still refuses unless no services remain or `force=true`) |
 | Ports, profiles, VLANs | `show ont-port <id> detail`, `show ont-profile`, `show vlan` |
 
 What differs from CMS:
 
-- **One SSH session per E7.** Commands to one E7 run one at a time (Calix allows five CLI sessions per E7; this uses one). A command that times out or is cancelled closes its session, because the E7's next output might belong to the abandoned command. The next call logs in again.
+- **One SSH session per E7.** Commands to one E7 run one at a time (Calix allows five CLI sessions per E7; this uses one). A command that times out or is cancelled closes its session, because the E7's next output might belong to the abandoned command. The next call logs in again. Calix's capacities table: when a sixth CLI login is accepted, the E7 drops the oldest session as most likely idle, and the optional inactivity timeout is 30 minutes. A session the E7 closed while idle is noticed before the next command is sent; that command logs in again and is sent once. A session lost after a command was sent is never retried, because the command may have run.
 - **Names, not IDs.** Bandwidth profiles, tag actions and ONT profiles are sent by name. Services have names too: `service_index` 1 is the first name in `E7_SERVICE_NAMES`, 2 the second, and so on. A service whose name is not in that list is still read (as index 101 and up) but cannot be changed through the API.
 - **Peak-rate overrides are refused.** `add eth-svc` has no documented peak-rate parameter. Use a bandwidth profile with the rate.
+- **Admin states.** `no-alarms` is for the ONT itself (`set ont`). Calix gives ONT ports and services only `enabled` and `disabled`, so `enabled-no-alarms` on a port or a service is refused before anything is sent.
+- **Services per ONT port, as Calix's capacities table gives them:** 8 on an Ethernet (g) port, 4 on a residential-gateway (G) interface (and 1 on a full-bridge interface, which this backend does not use). One more is refused before anything is sent, whatever `E7_SERVICE_NAMES` holds.
+- **Lengths are checked before sending.** An ONT's subscriber ID takes 1-63 characters and its description 1-47 (`create ont`); the API's own limit on an ONT description is 48, for CMS.
 - **Every argument is checked before it is sent.** Quotes, semicolons, newlines and other control characters are refused, so no value can end the command or start another. Values with spaces are quoted, as Calix documents.
 
 ## What is not verified
 
-**Calix shows no sample output for any of these commands.** The command syntax is documented. What the commands print is not, so the parsers in `app/nbi/e7_parse.py` are lenient rather than exact. They read "label: value" lines and column-aligned tables, and look labels up through `ALIASES`. The mock E7's output (`app/nbi/mock_e7.py`) is invented, so passing tests show that the backend and the mock agree, not that a real E7 parses.
+**Calix shows sample output for almost none of these commands.** The command syntax is documented. What the commands print is not, so the parsers in `app/nbi/e7_parse.py` are lenient rather than exact. They read "label: value" lines and column-aligned tables, and look labels up through `ALIASES`. The one sample table in Calix's E7 CLI reference (#220-00652, `show mcast`) puts header words one space apart both within and between columns, with a line of dashes under the header, one run per column. Tables are therefore read by the dashed line's columns, and the mock prints its tables that way (a test is built from that sample). The mock E7's output (`app/nbi/mock_e7.py`) is invented, so passing tests show that the backend and the mock agree, not that a real E7 parses.
 
 These are settings or guesses, all checked by the capture tool:
 
 | What | Where | Default |
 |---|---|---|
 | The prompt | `E7_PROMPT_PATTERN` | any word ending in `>` or `#` |
-| Pager and notifications off | `E7_PAGER_COMMAND`, `E7_SESSION_COMMANDS` | `set session pager disabled`, and the same for alarm, event and TCA notifications (documented commands) |
-| How a refusal reads | `E7_ERROR_PATTERN` | words such as error, invalid, failed, not found, already exists. Calix documents only "Invalid input detected at '^' marker" |
+| Pager and notifications off | `E7_PAGER_COMMAND`, `E7_SESSION_COMMANDS` | `set session pager disabled`, the inactivity timeout off (`set session timeout disabled`), and the same for alarm, event and TCA notifications (documented commands) |
+| Table rows | `table()` in `e7_parse.py` | read under the dashed line's columns; a row whose words cross the column edges (as Calix's R3.1-3.2 M&T guide prints the show mcast sample) is read one word per column, the rest of the line in the last |
+| How a refusal reads | `E7_ERROR_PATTERN` | words such as error, invalid, fail, not found, already exists. Calix documents only "Invalid input detected at '^' marker"; an open-source E7 test library checks real replies for "fail" and "not found", and sees "success" after many writes |
 | Service names | `E7_SERVICE_NAMES` | `Data1` to `Data8`. Run `show eth-svc-name` on the E7 to see the real ones |
 | ONT state words meaning up | `ONLINE_WORDS` in `e7_backend.py` | present, up, online, enabled, ... |
-| Port counts in `show ont-profile` | `port_counts` in `e7_parse.py` | read from Calix's legend letters (g, p, G, F, ...) as "4g 2p 1G" |
+| Port counts in `show ont-profile` | `port_columns` and `port_counts` in `e7_parse.py` | a column per port letter (Calix's M&T guide refers to "the G (RG) and F (FB) Ports columns"; G and g are kept apart), or failing that one cell such as "4g 2p 1G" |
 
 Also unknown:
 
@@ -68,5 +72,11 @@ Also unknown:
 
 ## Sources
 
+- Calix, E-Series EXA R3.x Turn-Up and Transport Guide, System Support Capacities: services per ONT interface (8 Ethernet, 4 RG, 1 FB), five CLI sessions, the oldest dropped on a sixth login, 30-minute timeout, 4,000-character paste
+- Calix, E-Series (E7 OS R3.1-3.2) Maintenance and Troubleshooting Guide: show ont-profile's G and F Ports columns, `set ont <id> pon-port none` to unlink, deleting an ONT only once unlinked, the show mcast sample with unpadded rows
+- DarcyChang/MyProjects on GitHub (`Teststeplib_e7.py`, `E7_base.robot`): an automation library run against real E7s. Its checks show `show ont <id>` with a `Location:` field, `Label : value` detail lines (`File Vers :`, `Management Mode :`), "not found" for a missing object, "fail" in refusals, `Data1`.. service names, and `set session timeout disable` at login
+- Calix, E7 EXA R3.x GPON Applications Guide: interface groups RG `G1`, full bridge `F1`, half-bridge `g1`
+
 - Calix, E7 EXA R3.x CLI Reference: [add eth-svc](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/36169.htm), [create svc-tag-action](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/36190.htm), [create ont](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/36182.htm), [delete ont](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/36211.htm), [remove eth-svc](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/36262.htm), [show ont](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/36360.htm), [show ont-port](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/41014.htm), [set ont-port](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/105316.htm), [show ont-profile](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/36367.htm), [About the E7 CLI](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/cli/41308.htm)
+- DarcyChang/MyProjects on GitHub (`Teststeplib_e7.py`, `E7_base.robot`): an automation library run against real E7s. Its checks show `show ont <id>` with a `Location:` field, `Label : value` detail lines (`File Vers :`, `Management Mode :`), "not found" for a missing object, "fail" in refusals, `Data1`.. service names, and `set session timeout disable` at login
 - Calix, E7 EXA R3.x GPON Applications Guide: [creating an ONT](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/gag/36650.htm), [ONT interface groups (RG "G1", full bridge "F1")](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/gag/66248.htm), [GPON L2 data services](https://www.calix.com/content/dam/calix/mycalix-misc/lib/iae/exa/r3x/gag/37525.htm)
