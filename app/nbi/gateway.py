@@ -7,7 +7,10 @@ The gateway adds, in one place:
   - a timeout on every call
   - retries with backoff, for reads only (writes are retried by the worker,
     which first checks what was already applied)
-  - a circuit breaker, so a CMS outage fails fast instead of stalling the API
+  - a circuit breaker, so a CMS outage fails fast instead of stalling the API.
+    One for the whole backend when every network is behind one CMS; one per
+    network when each network is its own device (the E7 CLI path), so one
+    unreachable E7 does not stop the others
   - a cap on concurrent CMS calls
   - typed errors (app/nbi/errors.py) that map to clean API responses
 
@@ -71,45 +74,48 @@ class NbiBackend(Protocol):
 class NbiGateway:
     def __init__(self, backend: NbiBackend, *, timeout: float = 10.0, max_retries: int = 2,
                  retry_backoff: float = 0.25, max_concurrency: int = 8,
-                 breaker: Optional[CircuitBreaker] = None):
+                 breaker: Optional[CircuitBreaker] = None, breaker_per_network: bool = False):
         self.backend = backend
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
+        # With breaker_per_network, this one is only the template the networks' breakers copy
         self.breaker = breaker or CircuitBreaker()
+        self.breaker_per_network = breaker_per_network
+        self._network_breakers: Dict[str, CircuitBreaker] = {}
         self._slots = asyncio.Semaphore(max_concurrency)
 
     # --- Operations ------------------------------------------------------
 
     async def list_discovered_onts(self, network: str) -> List[DiscoveredOnt]:
-        return await self._call("list_discovered_onts",
+        return await self._call("list_discovered_onts", network,
                                 lambda: self.backend.list_discovered_onts(network), idempotent=True)
 
     async def get_ont(self, network: str, ont_id: int) -> OntState:
-        return await self._call("get_ont",
+        return await self._call("get_ont", network,
                                 lambda: self.backend.get_ont(network, ont_id), idempotent=True)
 
     async def find_ont_by_serial(self, network: str, serial_number: str) -> Optional[OntState]:
-        return await self._call("find_ont_by_serial",
+        return await self._call("find_ont_by_serial", network,
                                 lambda: self.backend.find_ont_by_serial(network, serial_number),
                                 idempotent=True)
 
     async def find_onts_by_subscriber(self, network: str, subscriber_id: str) -> List[OntState]:
         """ONTs provisioned for a subscriber. Use get_ont() on a match for its services."""
-        return await self._call("find_onts_by_subscriber",
+        return await self._call("find_onts_by_subscriber", network,
                                 lambda: self.backend.find_onts_by_subscriber(network, subscriber_id),
                                 idempotent=True)
 
     async def list_onts(self, network: str) -> List[OntState]:
         """Every provisioned ONT on a network, without services. Slow on a large network."""
-        return await self._call("list_onts", lambda: self.backend.list_onts(network), idempotent=True)
+        return await self._call("list_onts", network, lambda: self.backend.list_onts(network), idempotent=True)
 
     async def create_ont(self, network: str, spec: OntSpec) -> OntState:
-        return await self._call("create_ont",
+        return await self._call("create_ont", network,
                                 lambda: self.backend.create_ont(network, spec), idempotent=False)
 
     async def add_ethernet_service(self, network: str, ont_id: int, service: EthernetService) -> None:
-        return await self._call("add_ethernet_service",
+        return await self._call("add_ethernet_service", network,
                                 lambda: self.backend.add_ethernet_service(network, ont_id, service),
                                 idempotent=False)
 
@@ -118,54 +124,67 @@ class NbiGateway:
         Delete an ONT. force=True also deletes everything still on it, including voice services
         this API cannot see: use it only on an ONT this API has just created.
         """
-        return await self._call("delete_ont",
+        return await self._call("delete_ont", network,
                                 lambda: self.backend.delete_ont(network, ont_id, force=force), idempotent=False)
 
     async def get_ont_ports(self, network: str, ont_id: int) -> OntPorts:
         """Ethernet ports and the router side of one ONT. Costs one CMS call per port."""
-        return await self._call("get_ont_ports", lambda: self.backend.get_ont_ports(network, ont_id),
+        return await self._call("get_ont_ports", network, lambda: self.backend.get_ont_ports(network, ont_id),
                                 idempotent=True)
 
     async def update_port(self, network: str, ont_id: int, attachment: Attachment, number: int,
                           change: PortChange) -> None:
-        return await self._call("update_port",
+        return await self._call("update_port", network,
                                 lambda: self.backend.update_port(network, ont_id, attachment, number, change),
                                 idempotent=False)
 
     async def update_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
                              service_index: int, change: ServiceChange) -> None:
-        return await self._call(
-            "update_service",
+        return await self._call("update_service", network,
             lambda: self.backend.update_service(network, ont_id, attachment, ont_port, service_index, change),
             idempotent=False)
 
     async def delete_service(self, network: str, ont_id: int, attachment: Attachment, ont_port: int,
                              service_index: int) -> None:
-        return await self._call(
-            "delete_service",
+        return await self._call("delete_service", network,
             lambda: self.backend.delete_service(network, ont_id, attachment, ont_port, service_index),
             idempotent=False)
 
     async def list_ont_profiles(self, network: str) -> List[OntProfile]:
-        return await self._call("list_ont_profiles", lambda: self.backend.list_ont_profiles(network),
+        return await self._call("list_ont_profiles", network, lambda: self.backend.list_ont_profiles(network),
                                 idempotent=True)
 
     async def list_vlans(self, network: str) -> List[Vlan]:
-        return await self._call("list_vlans", lambda: self.backend.list_vlans(network), idempotent=True)
+        return await self._call("list_vlans", network, lambda: self.backend.list_vlans(network), idempotent=True)
 
     def health(self) -> Dict[str, Any]:
-        return {"backend": self.backend.name, "breaker": self.breaker.snapshot()}
+        if not self.breaker_per_network:
+            return {"backend": self.backend.name, "breaker": self.breaker.snapshot()}
+        return {"backend": self.backend.name, "breaker_per_network": True,
+                "breakers": {network: b.snapshot() for network, b in sorted(self._network_breakers.items())}}
+
+    def breaker_for(self, network: str) -> CircuitBreaker:
+        """The breaker guarding calls to one network"""
+        if not self.breaker_per_network:
+            return self.breaker
+        if network not in self._network_breakers:
+            self._network_breakers[network] = CircuitBreaker(
+                failure_threshold=self.breaker.failure_threshold, recovery_seconds=self.breaker.recovery_seconds,
+                clock=self.breaker._clock)
+        return self._network_breakers[network]
 
     async def close(self) -> None:
         await self.backend.close()
 
     # --- Resilience ------------------------------------------------------
 
-    async def _call(self, operation: str, fn: Callable[[], Awaitable[Any]], *, idempotent: bool) -> Any:
+    async def _call(self, operation: str, network: str, fn: Callable[[], Awaitable[Any]], *,
+                    idempotent: bool) -> Any:
         attempts = 1 + (self.max_retries if idempotent else 0)
+        breaker = self.breaker_for(network)
 
         for attempt in range(1, attempts + 1):
-            self.breaker.allow(operation)  # raises NbiCircuitOpenError while CMS is rested
+            breaker.allow(operation)  # raises NbiCircuitOpenError while CMS is rested
 
             try:
                 async with self._slots:
@@ -176,21 +195,21 @@ class NbiGateway:
                 error = e
             except NbiError as e:
                 # CMS answered, it just said no. That is not an outage.
-                self.breaker.record_success()
+                breaker.record_success()
                 e.operation = operation
                 raise
             except BaseException:
-                self.breaker.abandon()
+                breaker.abandon()
                 raise
             else:
-                self.breaker.record_success()
+                breaker.record_success()
                 return result
 
             error.operation = operation
-            self.breaker.record_failure()
+            breaker.record_failure()
             logger.warning(f"CMS call {operation} failed (attempt {attempt}/{attempts}): {error.message}")
 
-            if attempt == attempts or self.breaker.state == OPEN:
+            if attempt == attempts or breaker.state == OPEN:
                 raise error
             await asyncio.sleep(self.retry_backoff * 2 ** (attempt - 1))
 
@@ -338,4 +357,5 @@ def build_gateway(settings: Any) -> NbiGateway:
         breaker=CircuitBreaker(
             failure_threshold=settings.nbi_breaker_failure_threshold,
             recovery_seconds=settings.nbi_breaker_recovery_seconds),
+        breaker_per_network=choice == "e7-cli",  # each network is its own E7
     )

@@ -139,11 +139,22 @@ class ExportService(BaseModel):
 
 VoiceStatus = Literal["none", "not checked", "unknown"]
 
+# ExportRecord.coverage: whether everything CMS holds for the ONT was read, the way voice says it for voice.
+# This API manages part of an ONT; what it could not read must not look like nothing.
+COVERAGE_COMPLETE = "complete"  # every service is in a slot this code knows, and its ports were read
+COVERAGE_INCOMPLETE = "incomplete"  # something on the ONT was not read: see the record's notes
+COVERAGE_UNKNOWN = "unknown"  # read back from a sheet without the coverage column
+COVERAGE_VALUES = (COVERAGE_COMPLETE, COVERAGE_INCOMPLETE, COVERAGE_UNKNOWN)
+CoverageStatus = Literal["complete", "incomplete", "unknown"]
+
 
 class ExportRecord(BaseModel):
     voice: VoiceStatus = Field(VOICE_UNKNOWN, description="Voice is never exported. 'none': no voice ports. "
                                                           "'not checked': voice ports whose service was not read. "
                                                           "'unknown': the voice port count could not be read")
+    coverage: CoverageStatus = Field(COVERAGE_INCOMPLETE, description="'complete' only when every service and port "
+                                                                      "was read. 'incomplete': see notes. 'unknown': "
+                                                                      "read from a sheet without this column")
     subscriber: ExportSubscriber
     ont: ExportOnt
     data_services: List[ExportService] = Field(default_factory=list)
@@ -166,6 +177,12 @@ class CutoverExport(BaseModel):
     def voice_not_checked(self) -> int:
         """ONTs whose voice is 'not checked' or 'unknown'"""
         return sum(1 for r in self.records if r.voice != VOICE_NONE)
+
+    @computed_field
+    @property
+    def coverage_incomplete(self) -> int:
+        """ONTs on which something was not read ('incomplete' or 'unknown'): check them by hand"""
+        return sum(1 for r in self.records if r.coverage != COVERAGE_COMPLETE)
 
 
 def _legacy_port(service: ProvisionedService) -> str:
@@ -246,10 +263,13 @@ async def export_ont(gateway: NbiGateway, network: str, ont_id: int, include_por
     unknown = [s for s in ont.services if s.attachment.value == "unknown"]
     if unknown and not any("ONT slot" in n for n in notes):
         notes.append(f"{len(unknown)} service(s) are in an ONT slot this code does not recognise.")
+    # Ports not read, or a service in a slot this code does not know: part of the ONT was not exported
+    complete = not unknown and not any(n.startswith("Ports could not be read") for n in notes)
     if not ont.subscriber_id:
         notes.append("The ONT has no subscriber ID on CMS.")
     return ExportRecord(
         voice=voice_status(legacy.voice_ports),
+        coverage=COVERAGE_COMPLETE if complete else COVERAGE_INCOMPLETE,
         subscriber=ExportSubscriber(account_number=ont.subscriber_id),
         ont=ExportOnt(serial_number=ont.serial_number, registration_id=ont.registration_id,
                       description=ont.description, legacy=legacy),
@@ -294,7 +314,7 @@ async def export_network(gateway: NbiGateway, network: str, pon_port: Optional[s
 # --- CSV ------------------------------------------------------------------------------
 
 SERVICE_COLUMNS = (
-    ("account_number", "voice") + FILL_IN_SUBSCRIBER + FILL_IN_ONT + (
+    ("account_number", "voice", "coverage") + FILL_IN_SUBSCRIBER + FILL_IN_ONT + (
         "serial_number", "registration_id", "ont_description", "legacy_network", "legacy_ont_id",
         "legacy_profile", "legacy_model", "legacy_pon_port", "legacy_admin_state", "legacy_router_present",
         "legacy_router_default_to_rg", "legacy_port_modes", "legacy_router_capable_running_as_bridge",
@@ -334,7 +354,7 @@ def service_rows(export: CutoverExport) -> Iterable[Dict[str, str]]:
     """One row per data service. An ONT with no services still gets one row."""
     for record in export.records:
         legacy = record.ont.legacy
-        base = {"account_number": record.subscriber.account_number, "voice": record.voice,
+        base = {"account_number": record.subscriber.account_number, "voice": record.voice, "coverage": record.coverage,
                 **{k: getattr(record.subscriber, k) for k in FILL_IN_SUBSCRIBER},
                 **{k: getattr(record.ont, k) for k in FILL_IN_ONT},
                 "serial_number": record.ont.serial_number, "registration_id": record.ont.registration_id,
@@ -413,8 +433,11 @@ def from_services_csv(text: str) -> CutoverExport:
             if key not in records:
                 modes = _parse_modes(value(row, "legacy_port_modes"))
                 voice_ports, voice_state = voice(row)
+                coverage = value(row, "coverage") or COVERAGE_UNKNOWN
+                if coverage not in COVERAGE_VALUES:
+                    raise ValueError(f"coverage: '{coverage}' is not one of {', '.join(COVERAGE_VALUES)}")
                 records[key] = ExportRecord(
-                    voice=voice_state,
+                    voice=voice_state, coverage=coverage,
                     subscriber=ExportSubscriber(account_number=value(row, "account_number"),
                                                 **{k: value(row, k) for k in FILL_IN_SUBSCRIBER}),
                     ont=ExportOnt(serial_number=row["serial_number"], registration_id=value(row, "registration_id"),

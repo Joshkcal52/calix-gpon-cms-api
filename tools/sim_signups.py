@@ -62,7 +62,8 @@ class InProcessApi:
         for name, value in (("mock_mode", True), ("nbi_backend", "e7-cli" if backend == "e7-cli" else "cms"),
                             ("mock_pon_size", pon_size), ("e7_nodes", None), ("cms_host", None),
                             ("kafka_bootstrap_servers", None), ("api_keys", None),
-                            ("nbi_timeout_seconds", 30.0)):
+                            ("nbi_timeout_seconds", 30.0),
+                            ("write_requests_per_minute", 0), ("deletes_per_hour", 0)):  # a load test, not a client
             setattr(settings, name, value)
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))

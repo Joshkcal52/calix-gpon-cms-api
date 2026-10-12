@@ -6,7 +6,8 @@
 # before using it:
 #
 #   kubectl create secret generic cms-nbi-credentials --from-literal=username=... --from-literal=password=...
-#   kubectl create secret generic gpon-cms-api-keys --from-literal=api-keys='portal:<32+ random chars>,noc:<...>'
+#   kubectl create secret generic gpon-cms-api-keys --from-literal=api-keys='portal:<32+ random chars>:read+change,noc:<...>:read+change+delete'
+#   (scopes after the second colon: read, change, delete; give each caller only what it needs)
 #
 # Every /api/v2 route needs one of those API keys (X-API-Key header). Without
 # API_KEYS the API answers 503 to everything under /api/v2.
@@ -19,6 +20,8 @@
 #   kafka-topics.sh --create --topic gpon-cms.commands.dlq          --partitions 1  --replication-factor 3
 #   kafka-topics.sh --create --topic gpon-cms.job-updates           --partitions 6  --replication-factor 3 \
 #       --config retention.ms=604800000
+#   (keep job-updates longer than COMMAND_MAX_AGE_SECONDS: a retry finds what its earlier attempt
+#   created there, and cannot roll it back once that has expired)
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -55,7 +55,7 @@ from app.models.provisioning_model import (
     PortChange, PortState, ProvisionedService, RouterState, ServiceChange, Vlan, port_name
 )
 from app.nbi.client import CmsClient, element
-from app.nbi.errors import NbiError, NbiNotFoundError, NbiNotVerifiedError, NbiRejectedError
+from app.nbi.errors import NbiError, NbiNotFoundError, NbiNotVerifiedError, NbiParseError, NbiRejectedError
 from app.nbi.router_side import MODE_NOT_SETTABLE, NOT_CONFIGURED, RouterAddressing, read_port_mode
 from app.nbi.serno import from_serno, to_serno
 
@@ -186,10 +186,20 @@ def _ge_port(obj: Dict[str, Any], number: int, router: Optional[RouterAddressing
         description=_scalar(obj.get("descr")), security_profile=_dig(obj, "sec", "id", "ethsecprof"))
 
 
+def _required(value: Any, what: str, object_type: str) -> Any:
+    """A field a decision rests on. Missing, it is a misread, never "none": NbiParseError, nothing written."""
+    if value is None:
+        raise NbiParseError(f"CMS sent an {object_type} without {what} (or under an element name this API does not "
+                            f"know). Not read as empty, so nothing is decided from it; python -m app.tools.cms_check "
+                            f"shows the reply.")
+    return value
+
+
 def _ont_state(obj: Dict[str, Any], services: Optional[List[ProvisionedService]] = None) -> OntState:
     return OntState(
-        ont_id=int(_dig(obj, "id", "ont")),
-        serial_number=from_serno(_scalar(obj.get("serno")) or "0", _scalar(obj.get("vendor")) or ""),
+        ont_id=_required(_number(_dig(obj, "id", "ont")), "an ONT number", "Ont"),
+        serial_number=from_serno(_required(_scalar(obj.get("serno")), "a serial number (serno)", "Ont"),
+                                 _scalar(obj.get("vendor")) or ""),
         model=_scalar(obj.get("model")),
         profile=_dig(obj, "ontprof", "id", "ontprof"),
         admin_state=_scalar(obj.get("admin")) or "enabled",
@@ -221,8 +231,9 @@ def _attachment(slot: Optional[str], router: Optional[RouterAddressing]) -> Atta
 def _service(obj: Dict[str, Any], router: Optional[RouterAddressing] = None) -> ProvisionedService:
     slot = _dig(obj, "id", "ontslot")
     return ProvisionedService(
-        service_index=int(_dig(obj, "id", "ethsvc") or 1),
-        ont_port=int(_dig(obj, "id", "ontethany") or 1),
+        # Never defaulted: a guessed number would send a change or a delete to whichever service is really there
+        service_index=_required(_number(_dig(obj, "id", "ethsvc")), "a service number (ethsvc)", "EthSvc"),
+        ont_port=_required(_number(_dig(obj, "id", "ontethany")), "a port number (ontethany)", "EthSvc"),
         attachment=_attachment(slot, router), ont_slot=slot,
         vlan=_vlan(obj.get("out-tag")),
         inner_vlan=_vlan(obj.get("in-tag")),
@@ -264,7 +275,7 @@ class CmsBackend:
         matches = await self._show_ont(network, {"serno": to_serno(serial_number)})
         if not matches:
             return None
-        ont_id = int(_dig(matches[0], "id", "ont"))
+        ont_id = _required(_number(_dig(matches[0], "id", "ont")), "an ONT number", "Ont")
         return _ont_state(matches[0], await self._services(network, ont_id))
 
     async def find_onts_by_subscriber(self, network: str, subscriber_id: str) -> List[OntState]:

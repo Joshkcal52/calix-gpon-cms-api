@@ -41,6 +41,11 @@ NetworkPath = Path(..., pattern=NETWORK_PATTERN, description="CMS network name, 
 OntPath = Path(..., ge=1, description="ONT ID")
 PortPath = Path(..., pattern=PORT_PATTERN, description="eth1..eth8, or rg1 for the router side")
 ServicePath = Path(..., ge=1, le=12, description="Service number on the port")
+# ONT IDs and service numbers are reused after a delete: these prove a queued change still means the same thing
+SerialQuery = Query(None, pattern=r"^[A-Za-z0-9]{4,16}$",
+                    description="Refuse unless the ONT still has this serial number")
+VlanQuery = Query(None, ge=1, le=4094, description="Refuse unless the service is on this VLAN")
+DryRunQuery = Query(False, description="Read and check everything, report what would be sent, send nothing")
 
 
 async def _queue(jobs: JobStore, http_request: Request, network: str, ont_id: int, change) -> JobAccepted:
@@ -87,26 +92,31 @@ async def get_ont_ports(network: str = NetworkPath, ont_id: int = OntPath,
 
 @router.post("/onts/{ont_id}/ports/{port}/enable", response_model=JobAccepted, status_code=202)
 async def enable_port(http_request: Request, network: str = NetworkPath, ont_id: int = OntPath,
-                      port: str = PortPath, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
+                      port: str = PortPath, serial_number: Optional[str] = SerialQuery,
+                      dry_run: bool = DryRunQuery, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
     """Set a port's admin state to enabled"""
-    change = UpdatePort(port=port, change=PortChange(admin_state="enabled"))
+    change = UpdatePort(port=port, change=PortChange(admin_state="enabled"), serial_number=serial_number,
+                        dry_run=dry_run)
     return await _queue(jobs, http_request, network, ont_id, change)
 
 
 @router.post("/onts/{ont_id}/ports/{port}/disable", response_model=JobAccepted, status_code=202)
 async def disable_port(http_request: Request, network: str = NetworkPath, ont_id: int = OntPath,
-                       port: str = PortPath, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
+                      port: str = PortPath, serial_number: Optional[str] = SerialQuery,
+                      dry_run: bool = DryRunQuery, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
     """Set a port's admin state to disabled"""
-    change = UpdatePort(port=port, change=PortChange(admin_state="disabled"))
+    change = UpdatePort(port=port, change=PortChange(admin_state="disabled"), serial_number=serial_number,
+                        dry_run=dry_run)
     return await _queue(jobs, http_request, network, ont_id, change)
 
 
 @router.patch("/onts/{ont_id}/ports/{port}", response_model=JobAccepted, status_code=202)
 async def update_port(body: PortChange, http_request: Request, network: str = NetworkPath,
-                      ont_id: int = OntPath, port: str = PortPath,
-                      jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
+                      ont_id: int = OntPath, port: str = PortPath, serial_number: Optional[str] = SerialQuery,
+                      dry_run: bool = DryRunQuery, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
     """Change an Ethernet port's admin state, subscriber ID, security profile or description"""
-    return await _queue(jobs, http_request, network, ont_id, UpdatePort(port=port, change=body))
+    change = UpdatePort(port=port, change=body, serial_number=serial_number, dry_run=dry_run)
+    return await _queue(jobs, http_request, network, ont_id, change)
 
 
 # --- Services ---------------------------------------------------------------------
@@ -115,8 +125,10 @@ async def update_port(body: PortChange, http_request: Request, network: str = Ne
              response_model=JobAccepted, status_code=202)
 async def enable_service(http_request: Request, network: str = NetworkPath, ont_id: int = OntPath,
                          port: str = PortPath, service_index: int = ServicePath,
-                         jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
-    change = UpdateService(port=port, service_index=service_index, change=ServiceChange(admin_state="enabled"))
+                         serial_number: Optional[str] = SerialQuery, expect_vlan: Optional[int] = VlanQuery,
+                         dry_run: bool = DryRunQuery, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
+    change = UpdateService(port=port, service_index=service_index, change=ServiceChange(admin_state="enabled"),
+                           serial_number=serial_number, expect_vlan=expect_vlan, dry_run=dry_run)
     return await _queue(jobs, http_request, network, ont_id, change)
 
 
@@ -124,8 +136,10 @@ async def enable_service(http_request: Request, network: str = NetworkPath, ont_
              response_model=JobAccepted, status_code=202)
 async def disable_service(http_request: Request, network: str = NetworkPath, ont_id: int = OntPath,
                           port: str = PortPath, service_index: int = ServicePath,
-                          jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
-    change = UpdateService(port=port, service_index=service_index, change=ServiceChange(admin_state="disabled"))
+                         serial_number: Optional[str] = SerialQuery, expect_vlan: Optional[int] = VlanQuery,
+                         dry_run: bool = DryRunQuery, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
+    change = UpdateService(port=port, service_index=service_index, change=ServiceChange(admin_state="disabled"),
+                           serial_number=serial_number, expect_vlan=expect_vlan, dry_run=dry_run)
     return await _queue(jobs, http_request, network, ont_id, change)
 
 
@@ -133,10 +147,12 @@ async def disable_service(http_request: Request, network: str = NetworkPath, ont
               response_model=JobAccepted, status_code=202)
 async def update_service(body: ServiceChange, http_request: Request, network: str = NetworkPath,
                          ont_id: int = OntPath, port: str = PortPath, service_index: int = ServicePath,
-                         jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
+                         serial_number: Optional[str] = SerialQuery, expect_vlan: Optional[int] = VlanQuery,
+                         dry_run: bool = DryRunQuery, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
     """Change a service's bandwidth profile, tag action, VLAN or admin state. Only what differs is sent."""
     check_bandwidth_profiles([body.bandwidth_profile], settings.known_bandwidth_profiles())
-    change = UpdateService(port=port, service_index=service_index, change=body)
+    change = UpdateService(port=port, service_index=service_index, change=body, serial_number=serial_number,
+                           expect_vlan=expect_vlan, dry_run=dry_run)
     return await _queue(jobs, http_request, network, ont_id, change)
 
 
@@ -144,11 +160,15 @@ async def update_service(body: ServiceChange, http_request: Request, network: st
                response_model=JobAccepted, status_code=202)
 async def delete_service(http_request: Request, network: str = NetworkPath, ont_id: int = OntPath,
                          port: str = PortPath, service_index: int = ServicePath,
-                         expect_vlan: Optional[int] = Query(None, ge=1, le=4094,
-                                                            description="Refuse unless the service is on this VLAN"),
-                         jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
-    """Delete one service. Deleting one that is already gone succeeds."""
-    change = DeleteService(port=port, service_index=service_index, expect_vlan=expect_vlan)
+                         expect_vlan: Optional[int] = VlanQuery, serial_number: Optional[str] = SerialQuery,
+                         dry_run: bool = DryRunQuery, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
+    """
+    Delete one service. Deleting one that is already gone succeeds. Send expect_vlan (and
+    serial_number): service numbers are reused, so without them a delayed delete can remove the
+    service a technician has since put at that number.
+    """
+    change = DeleteService(port=port, service_index=service_index, expect_vlan=expect_vlan,
+                           serial_number=serial_number, dry_run=dry_run)
     return await _queue(jobs, http_request, network, ont_id, change)
 
 
@@ -162,16 +182,18 @@ async def delete_ont(http_request: Request, network: str = NetworkPath, ont_id: 
                      voice_checked: bool = Query(
                          False, description="Someone has checked in CMS that it has no voice service to keep. "
                                             "Required if its ONT profile has voice ports"),
-                     jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
+                     dry_run: bool = DryRunQuery, jobs: JobStore = Depends(get_jobs)) -> JobAccepted:
     """
     Delete an ONT. Refused if the ONT ID now holds a different serial number,
     if it still has services and force is false, or if its ONT profile has
     voice ports and voice_checked is false (this API does not read voice
     services). Deleting one that is already gone succeeds.
 
-    With force, the data services are deleted one by one first. The ONT
-    itself is always deleted without CMS's force, so CMS refuses it if
-    anything is still on it.
+    With force, the data services are deleted one by one first, each checked
+    again just before. The ONT itself is always deleted without CMS's force,
+    so CMS refuses it if anything is still on it; the job's error then lists
+    the data services already removed. dry_run=true reports what would be
+    deleted.
     """
-    change = DeleteOnt(serial_number=serial_number, force=force, voice_checked=voice_checked)
+    change = DeleteOnt(serial_number=serial_number, force=force, voice_checked=voice_checked, dry_run=dry_run)
     return await _queue(jobs, http_request, network, ont_id, change)

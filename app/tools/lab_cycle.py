@@ -244,7 +244,11 @@ class LabCycle:
             raise Failed("The PON is not as it was before the cycle.")
 
     async def clean_up(self) -> None:
-        """After a failed step: delete the ONT this run created, with force, so the lab is as it was"""
+        """
+        After a failed step: delete the ONT this run created, with force, so the lab is as it was. Not if
+        it holds a service this run did not add: someone else is using the lab ONT, and force would take
+        their service (or a voice line, which this API cannot see) with it.
+        """
         if self.ont_id is None:
             return
         print(f"\n  Cleaning up: deleting ONT {self.ont_id} ({self.args.serial}), which this run created, with "
@@ -253,6 +257,13 @@ class LabCycle:
             ont = await self.gateway.get_ont(self.network, self.ont_id)
             if ont.serial_number != self.args.serial:
                 print(f"  NOT deleted: ONT {self.ont_id} holds {ont.serial_number}, not {self.args.serial}. "
+                      f"Check it by hand.", file=self.out)
+                return
+            ours = self._activation(self.args.bandwidth_profile).services[0].identity()
+            others = [s for s in ont.services if s.identity() != ours]
+            if others:
+                listed = ", ".join(f"port {s.ont_port} service {s.service_index} (VLAN {s.vlan})" for s in others)
+                print(f"  NOT deleted: ONT {self.ont_id} also holds service(s) this run did not add ({listed}). "
                       f"Check it by hand.", file=self.out)
                 return
             await self.gateway.delete_ont(self.network, self.ont_id, force=True)

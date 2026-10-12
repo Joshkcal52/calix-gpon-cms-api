@@ -14,7 +14,7 @@ from app.models.provisioning_model import (
     ServiceChange, StatusCheckItem, StatusCheckResult, port_name, service_identity
 )
 from app.messaging.bus import BusUnavailableError
-from app.nbi.errors import NbiConflictError, NbiError, NbiNotFoundError, NbiRejectedError
+from app.nbi.errors import NbiConflictError, NbiError, NbiNotFoundError, NbiRejectedError, NbiVerifyError
 from app.nbi.gateway import NbiGateway
 from app.worker.runner import JobContext
 
@@ -72,7 +72,8 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
        without a VLAN, by its side, port and tag action. One that is already
        bound but differs (bandwidth profile, tag action, peak rates) is changed
        to match the request
-    5. Wait for the ONT to come online
+    5. Wait for the ONT to come online, and check that every requested service
+       reads back as asked
 
     CMS applies no port template through its API, so each port setting and
     each service is sent on its own.
@@ -226,14 +227,28 @@ async def activate_ont(context: JobContext, gateway: NbiGateway, network: str,
             break
         await asyncio.sleep(poll_seconds)
 
+    # CMS accepting each write is not proof: the last read must show every requested service as asked
+    held = {s.identity(): s for s in ont.services}
+    wrong = [s for s in request.services
+             if s.identity() not in held or service_differences(held[s.identity()], s)]
+    if wrong:
+        listed = ", ".join(f"{port_name(Attachment(s.attach_to), s.ont_port)} "
+                           f"{f'VLAN {s.vlan}' if s.vlan is not None else f'tag action {s.tag_action}'}"
+                           + (" (missing)" if s.identity() not in held else " (differs)") for s in wrong)
+        raise NbiVerifyError(f"CMS accepted every step, but reading ONT {ont_id} back does not show these "
+                             f"services as asked: {listed}. ONT {ont_id} is left in place; check it in CMS.")
+
     online = ont.oper_state == OperState.ONLINE
     if not online and request.wait_for_online:
         await context.emit("warning",
                            f"ONT {ont_id} is provisioned but did not come online within "
                            f"{verify_timeout:g} seconds. It has been left in place.", ont_id=ont_id)
 
-    return {"network": network, "ont_id": ont_id, "serial_number": serial,
-            "online": online, "services": len(ont.services), "ports_configured": len(request.ports)}
+    # A succeeded job is not a live customer unless outcome says online
+    outcome = "online" if online else "provisioned_offline" if request.wait_for_online else "provisioned_not_waited"
+    return {"network": network, "ont_id": ont_id, "serial_number": serial, "outcome": outcome,
+            "online": online, "services": len(ont.services), "ports_configured": len(request.ports),
+            "verified": True}
 
 
 def port_differences(current: "PortState | None", wanted: Dict[str, Any]) -> Dict[str, Any]:

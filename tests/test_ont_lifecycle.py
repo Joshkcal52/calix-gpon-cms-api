@@ -202,7 +202,7 @@ def test_ont_delete_checks_the_serial_and_the_services(api):
     deleted = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F104", "force": "true",
                                                   "voice_checked": "true"}))
     assert deleted["result"] == {"network": NET, "ont_id": 4, "op": "delete_ont", "deleted": True,
-                                 "serial_number": "CXNK00A3F104", "services_removed": 1}
+                                 "serial_number": "CXNK00A3F104", "services_removed": 1, "verified": True}
     assert api.get(url).status_code == 404
     again = finish(api, api.delete(url, params={"serial_number": "CXNK00A3F104", "force": "true"}))
     assert again["status"] == "succeeded" and again["result"]["already_absent"] is True

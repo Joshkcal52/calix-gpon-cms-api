@@ -94,3 +94,19 @@ class NbiNotVerifiedError(NbiError):
     """
     code = "cms_unverified"
     http_status = 501
+
+
+class NbiParseError(NbiError):
+    """
+    CMS or the E7 answered, but the reply could not be read with confidence (a required field is
+    missing, or a row could not be parsed). Never read as "nothing there": a write decided from a
+    misread could add or delete the wrong thing. Not retried; the parser needs fixing.
+    """
+    code = "cms_unreadable"
+    http_status = 502
+
+
+class NbiVerifyError(NbiError):
+    """A write was accepted, but reading the object back does not show the change. Not retried."""
+    code = "not_applied"
+    http_status = 502
