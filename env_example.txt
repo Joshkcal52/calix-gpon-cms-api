@@ -22,9 +22,15 @@ LOG_LEVEL=INFO
 # KAFKA_TOPIC_PREFIX=gpon-cms
 # Run a worker inside the API process (default: yes without Kafka, no with it)
 # WORKER_EMBEDDED=true
-# API keys for /api/v2, comma-separated, each "name:key" or a bare key (16+ characters).
+# API keys for /api/v2, comma-separated, each "name:key:scopes", "name:key" or a bare key (16+ characters).
+# Scopes are read, change and/or delete joined by "+"; a key without scopes may do everything.
 # Required unless MOCK_MODE=true.
-# API_KEYS=portal:change-me-0123456789,noc:change-me-9876543210
+# API_KEYS=portal:change-me-0123456789:read+change,noc:change-me-9876543210:read+change+delete
+# Per key and API process; 0 turns a limit off. Over a limit the API answers 429 and queues nothing.
+# WRITE_REQUESTS_PER_MINUTE=120
+# DELETES_PER_HOUR=100
+# Attempts before a command that keeps timing out is failed rather than retried until it is too old
+# COMMAND_MAX_ATTEMPTS=20
 
 # --- Real CMS and the legacy GPON layer ---
 # The CMS server. Ignored when MOCK_MODE=true.

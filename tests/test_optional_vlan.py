@@ -43,6 +43,8 @@ NET = MOCK_NETWORK
 BASE = f"/api/v2/networks/{NET}"
 NO_VLAN, OTHER_NO_VLAN = MOCK_TAG_ACTIONS_NO_VLAN
 SERIAL = "CXNK00C4D301"  # discovered on PON 1/1/1 in the simulation, an 844G-1 (four Ethernet ports)
+ONT3 = {"serial_number": "CXNK00A3F103", "expect_vlan": 100}  # ONT 3's service 1 on eth1, as simulated
+NO_VLAN_SERVICE = {"serial_number": SERIAL, "expect_vlan": "none"}  # the service a signup without a VLAN binds
 
 
 # --- The identity rule on its own ---------------------------------------------------
@@ -151,8 +153,8 @@ def test_the_vlan_range_is_2_to_4093_and_a_service_without_one_needs_a_tag_actio
     for vlan in (2, 4093):
         assert EthernetService(**tagged(vlan)).vlan == vlan
     for vlan in (1, 4094):
-        assert api.patch(f"{BASE}/onts/3/ports/eth1/services/1", json={"vlan": vlan}).status_code == 422
-    assert api.patch(f"{BASE}/onts/3/ports/eth1/services/1", json={"vlan": 4093}).status_code == 202
+        assert api.patch(f"{BASE}/onts/3/ports/eth1/services/1", params=ONT3, json={"vlan": vlan}).status_code == 422
+    assert api.patch(f"{BASE}/onts/3/ports/eth1/services/1", params=ONT3, json={"vlan": 4093}).status_code == 202
 
 
 def test_the_simulated_tag_action_rule_is_enforced_and_a_failed_signup_is_undone(api):
@@ -172,17 +174,19 @@ def test_lifecycle_changes_on_a_service_without_a_vlan(api):
     ont_id = signup(api, [untagged()])["result"]["ont_id"]
     url = f"{BASE}/onts/{ont_id}/ports/eth1/services/1"
 
-    changed = finish(api, api.patch(url, json={"bandwidth_profile": "VOICE"}))
+    # expect_vlan=none says "the service without a VLAN": a change or delete reaches it, and only it
+    changed = finish(api, api.patch(url, params=NO_VLAN_SERVICE, json={"bandwidth_profile": "VOICE"}))
     assert changed["result"]["applied"] == {"bandwidth_profile": "VOICE"}
-    assert finish(api, api.patch(url, json={"bandwidth_profile": "VOICE"}))["result"]["changed"] is False
+    again = finish(api, api.patch(url, params=NO_VLAN_SERVICE, json={"bandwidth_profile": "VOICE"}))
+    assert again["result"]["changed"] is False
     assert services_of(api, ont_id) == [(1, 1, None, NO_VLAN)]
 
-    given_a_vlan = finish(api, api.patch(url, json={"vlan": 100}))
+    given_a_vlan = finish(api, api.patch(url, params=NO_VLAN_SERVICE, json={"vlan": 100}))
     assert given_a_vlan["status"] == "failed" and "takes no outer VLAN" in given_a_vlan["error"]["message"]
 
-    wrong = finish(api, api.delete(url, params={"expect_vlan": 100}))
+    wrong = finish(api, api.delete(url, params={**NO_VLAN_SERVICE, "expect_vlan": 100}))
     assert wrong["error"]["code"] == "conflict" and "no outer VLAN, not VLAN 100" in wrong["error"]["message"]
-    assert finish(api, api.delete(url))["result"]["deleted"] is True
+    assert finish(api, api.delete(url, params=NO_VLAN_SERVICE))["result"]["deleted"] is True
 
 
 def test_export_snapshot_and_smx_plan_carry_a_service_without_a_vlan(api):
@@ -290,7 +294,8 @@ def test_activation_without_a_vlan_over_soap_is_repeat_safe(nbi_server):
             (1, 1, None, NO_VLAN), (1, 2, 100, "1"), (1, 3, None, OTHER_NO_VLAN), (2, 1, None, NO_VLAN)]
 
         # A change to the service sends no out-tag and leaves it without a VLAN, and is repeat-safe
-        change = UpdateService(port="eth1", service_index=1, change=ServiceChange(bandwidth_profile="VOICE"))
+        change = UpdateService(port="eth1", service_index=1, serial_number=SERIAL, expect_vlan="none",
+                               change=ServiceChange(bandwidth_profile="VOICE"))
         assert (await apply_ont_change(Recorder(), gateway, NET, first["ont_id"], change))["changed"] is True
         assert (await apply_ont_change(Recorder(), gateway, NET, first["ont_id"], change))["changed"] is False
         service = (await gateway.get_ont(NET, first["ont_id"])).service_at(Attachment.ETHERNET, 1, 1)

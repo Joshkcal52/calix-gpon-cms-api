@@ -57,7 +57,8 @@ curl -N http://localhost:8000/api/v2/jobs/<job id>/events
 
 # Read it back, then suspend its service
 curl -s $A/onts/15/ports
-curl -s -X POST $A/onts/15/ports/eth1/services/1/disable
+# (every change names the ONT's serial, and a service change its VLAN, or none: IDs and numbers are reused)
+curl -s -X POST "$A/onts/15/ports/eth1/services/1/disable?serial_number=CXNK00C4D301&expect_vlan=100"
 
 # The cutover sheet for one PON, and the SMx plan for one subscriber
 curl -s "$A/export?pon=1/1/1&format=csv" > pon.csv
@@ -75,6 +76,7 @@ All routes are under `/api/v2`. Changes answer `202 Accepted` with a job; reads 
 | Lookups | `GET /networks/{network}/ont-profiles`, `GET /networks/{network}/vlans` |
 | Ports | `POST .../onts/{ont_id}/ports/{port}/enable`, `.../disable`, `PATCH .../ports/{port}` |
 | Services | `POST .../ports/{port}/services/{n}/enable`, `.../disable`, `PATCH` and `DELETE .../services/{n}` |
+| | Every port and service change needs `serial_number`, and every service change `expect_vlan` (the service's outer VLAN, or `none`): ONT IDs and service numbers are reused, so a change whose target no longer matches is refused. Every change also takes `dry_run=true`. |
 | Disconnect | `DELETE /networks/{network}/onts/{ont_id}` |
 | Cutover | `GET /networks/{network}/export`, `GET .../subscribers/{subscriber_id}/smx-plan`, `POST /smx/plans`, `POST /networks/{network}/snapshot-compare` |
 | Jobs | `GET /jobs/`, `GET /jobs/{job_id}`, `GET /jobs/{job_id}/events` (Server-Sent Events) |
@@ -230,6 +232,14 @@ config.py       settings
 - [docs/SIM_RESULTS.md](docs/SIM_RESULTS.md): 32 and 64 simulated customers on both backends, with fault injection
 - [docs/KNOWN_UNKNOWNS.md](docs/KNOWN_UNKNOWNS.md): every open risk, guess and gap in one place, who owns the CMS work, the license question, and how the code was written
 - [deploy/demo/README.md](deploy/demo/README.md): the multi-process demo
+
+## License
+
+GPL-3.0: see [LICENSE](LICENSE). Why that license, and what it covers, is in [docs/KNOWN_UNKNOWNS.md](docs/KNOWN_UNKNOWNS.md#license).
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a public issue for one.
 
 ## Credits
 

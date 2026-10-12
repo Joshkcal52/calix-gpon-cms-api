@@ -36,6 +36,7 @@ async def main() -> None:
     worker = Worker(
         bus, lanes, build_handlers(settings, gateway, bus),
         max_command_age=settings.command_max_age_seconds,
+        max_attempts=settings.command_max_attempts,
         heartbeat_file=settings.worker_heartbeat_file)
 
     loop = asyncio.get_running_loop()

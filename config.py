@@ -27,9 +27,17 @@ class Settings(BaseSettings):
     # https://portal.example.internal. Empty (the default) allows none.
     cors_allow_origins: str = ""
 
-    # API keys for every /api/v2 route, comma-separated. Each entry is a key, or name:key
-    # (the name is logged with each request). See app/auth.py.
+    # API keys for every /api/v2 route, comma-separated. Each entry is a key, name:key, or
+    # name:key:scopes, where scopes is read, change and/or delete joined by "+" (e.g.
+    # portal:3f9c...:read+change). A key without scopes may do everything, with a warning at start.
+    # See app/auth.py.
     api_keys: Optional[str] = None
+
+    # Limits on what one API key can queue, per API process (0 turns a limit off). They cap the
+    # damage a billing bug or a leaked key can do before someone notices: anything over them is
+    # answered 429 and nothing is queued.
+    write_requests_per_minute: int = 120  # every change, delete included
+    deletes_per_hour: int = 100  # ONT and service deletes
 
     # Which backend provisions: cms (the CMS northbound interface, CMS_HOST), e7-cli (each E7's command line
     # over SSH, E7_NODES), or auto: whichever of the two is set (an error if both are). With both configured,
@@ -82,9 +90,14 @@ class Settings(BaseSettings):
     e7_prompt_pattern: str = r"\S+[>#] ?"  # the whole last line of output when the E7 is waiting
     e7_pager_command: str = "set session pager disabled"
     e7_session_commands: str = "set session timeout disabled,set session alarm-notif disabled,set session event-notif disabled,set session tca-notif disabled"
+    # Also decides whether a write succeeded: a write whose output does not match is taken as
+    # applied, and is then read back to check. Narrowing it lets refusals through to that check.
     e7_error_pattern: str = (r"(?i)(\berror\b|invalid input|\binvalid\b|\bfail(?:ed|ure|s)?\b|cannot|can't|not allowed|denied|"
                              r"does not exist|doesn't exist|not found|no such|already exists|in use|unknown)")
-    # Service names, in service_index order: show eth-svc-name on the E7 lists the real ones
+    # Service names, in service_index order: show eth-svc-name on the E7 lists the real ones.
+    # NOT just a list of names: a name's place here IS its service number on the E7 path. Reordering
+    # it renumbers every service, so a queued change for service 2 reaches another one (changes that
+    # carry expect_vlan are refused instead). Only append to it.
     e7_service_names: str = "Data1,Data2,Data3,Data4,Data5,Data6,Data7,Data8"
 
     nbi_timeout_seconds: float = 10.0  # per CMS (or E7) call; 30 or more for E7, whose calls run several commands
@@ -101,11 +114,21 @@ class Settings(BaseSettings):
     # Leave empty to queue inside the API process (single process, nothing
     # survives a restart). Set to use Kafka, e.g. KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     kafka_bootstrap_servers: Optional[str] = None
+    # Names the topics AND the workers' consumer groups. Changing it on a running system starts new
+    # groups that read the command topics from the beginning: every command younger than
+    # COMMAND_MAX_AGE_SECONDS runs again. Drain the queue first, or lower the age limit for the switch.
     kafka_topic_prefix: str = "gpon-cms"
     # Must be longer than the slowest command, or Kafka takes the partition away mid-task
     kafka_max_poll_interval_seconds: float = 900.0
     kafka_session_timeout_seconds: float = 30.0  # how long before a dead worker's work is reassigned
-    command_max_age_seconds: float = 3600.0  # older queued commands are failed, not run
+    # Older queued commands are failed, not run. Also the replay window: a command redelivered or
+    # replayed within it runs as if it were new, so raising it to drain a backlog widens that window.
+    # The updates topic must keep messages longer than this, or a retry cannot find what its earlier
+    # attempt created and will not roll it back (deploy/k8s/gpon-cms.yaml, retention.ms).
+    command_max_age_seconds: float = 3600.0
+    # Attempts before a command that keeps failing for a passing reason (a timeout, not CMS being
+    # down for everyone) is failed for good, so one sick ONT does not hold up its whole network
+    command_max_attempts: int = 20
 
     # --- Legacy GPON layer (signup and GPON-to-XGS cutover) ---
     legacy_events_topic: str = "legacy-gpon-events"  # consumed: signup and cutover events

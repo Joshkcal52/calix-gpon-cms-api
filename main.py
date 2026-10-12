@@ -22,7 +22,7 @@ from app.routes import (
 
 # Import services for the v2 integration layer
 from app import audit
-from app.auth import ApiAuthError, check_configuration, require_api_key
+from app.auth import ApiAuthError, WriteLimiter, check_configuration, require_api_key
 from app.controller.job_controller import JobStore
 from app.messaging.bus import BusUnavailableError, build_bus
 from app.nbi.errors import NbiError
@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI):
     app.state.bus = bus
     app.state.gateway = gateway
     app.state.jobs = jobs
+    app.state.limiter = WriteLimiter(settings.write_requests_per_minute, settings.deletes_per_hour)
     app.state.worker = None
     app.state.mock_e7 = mock_e7_server.e7 if mock_e7_server is not None else None  # for tools/sim_signups.py
 
@@ -67,7 +68,8 @@ async def lifespan(app: FastAPI):
         settings.check_worker_timeouts(lanes)
         worker = Worker(
             bus, lanes, build_handlers(settings, gateway, bus),
-            max_command_age=settings.command_max_age_seconds)
+            max_command_age=settings.command_max_age_seconds,
+            max_attempts=settings.command_max_attempts)
         app.state.worker = worker
         worker_task = asyncio.create_task(worker.run(), name="embedded-worker")
     logger.info(f"Queue: {bus.name}. Backend: {gateway.backend.name}. "

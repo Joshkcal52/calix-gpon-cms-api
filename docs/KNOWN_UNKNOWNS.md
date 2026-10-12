@@ -1,6 +1,6 @@
 # Known unknowns and open risks
 
-Everything about this project that is untested, guessed, or not built, in one place. Read it before trusting the code with live subscribers. [HANDOFF.md](../HANDOFF.md) has the short version; [ARCHITECTURE.md](ARCHITECTURE.md) has the design.
+Everything about this project that is untested, guessed, or not built, in one place. Read it before trusting the code with live subscribers. [HANDOFF.md](../HANDOFF.md) has the short version; [ARCHITECTURE.md](ARCHITECTURE.md) has the design. [ANTI_PATTERNS.md](ANTI_PATTERNS.md) maps fifteen common failure patterns of network automation tools onto this code.
 
 Status words used below: **verified** means tested against the mock CMS or mock E7 (never a real one); **inferred** means guessed from public sources; **not built** means the code refuses or skips it.
 
@@ -67,22 +67,22 @@ SMx parameter names come from the IDI billing SMx R24.x docs, not from SMx. Ever
 
 ## Deployment gaps
 
-- **The circuit breaker is per process.** `deploy/k8s/gpon-cms.yaml` runs 2 API pods and 6 workers (3 per lane), each with its own breaker (5 consecutive failures, then 30 seconds' pause). In a CMS outage that is up to 40 failed calls before every process has stopped, and each process probes again every 30 seconds. The concurrency cap (`NBI_MAX_CONCURRENCY`, 8) is per process too: up to 64 CMS calls at once across the fleet. A shared breaker and cap would need shared state (Redis or similar); until then size replicas with this in mind.
+- **The circuit breaker is per process.** `deploy/k8s/gpon-cms.yaml` runs 2 API pods and 6 workers (3 per lane), each with its own breaker (5 consecutive failures, then 30 seconds' pause). In a CMS outage that is up to 40 failed calls before every process has stopped, and each process probes again every 30 seconds. The concurrency cap (`NBI_MAX_CONCURRENCY`, 8) is per process too: up to 64 CMS calls at once across the fleet. A shared breaker and cap would need shared state (Redis or similar); until then size replicas with this in mind. On the E7 path each process keeps one breaker per E7, so one unreachable E7 does not pause the others.
 - **No metrics or request IDs.** There are logs, `/health` and `/api/v2/nbi/health` (the breaker's state), nothing else. An ops team will want job success and failure rates, queue depth, CMS response times and breaker state exported (Prometheus or OpenTelemetry) and alerted on, plus a request ID carried from the HTTP request through the job to each CMS call. Job IDs already tie a job's log lines together.
 - **Placeholders.** The Kubernetes file still says `image: REPLACE_WITH_YOUR_IMAGE` and has never been applied to a cluster. It already reads the CMS login and the API keys from Kubernetes Secrets (`cms-nbi-credentials`, `gpon-cms-api-keys`), not from a `.env` file; how those Secrets are filled from your secret store (External Secrets, Vault, sealed secrets) is yours to wire up. `.env` and `env_example.txt` are for development only.
-- **No limit on queued jobs.** Nothing caps how many changes a client can queue. Commands for one network run one at a time (they share a Kafka partition), which limits the load on CMS but not the damage: a billing bug that sends a thousand bad changes gets a thousand bad changes applied, slowly. Commands older than `COMMAND_MAX_AGE_SECONDS` (1 hour) are failed rather than run. A per-key rate limit at the API (or at a gateway in front of it) is worth adding before billing is connected.
+- **Limits on queued jobs are per API process.** Each API key may queue `WRITE_REQUESTS_PER_MINUTE` changes (120) and `DELETES_PER_HOUR` deletes (100) per API process; beyond that it gets 429 and nothing is queued. With 2 API pods the fleet-wide limit is double that, and events written straight to the events topic are not limited at all. Commands for one network run one at a time (they share a Kafka partition). Commands older than `COMMAND_MAX_AGE_SECONDS` (1 hour) are failed rather than run, and one that keeps timing out is failed after `COMMAND_MAX_ATTEMPTS` (20). Every lifecycle change takes `dry_run=true`.
 - **Audit trail retention.** Every job records the API key that asked for it (`requested_by`), and each accepted, succeeded and failed change writes one JSON line to the `gpon_cms.audit` logger (`app/audit.py`), also to `AUDIT_LOG_PATH` if set. Job history in the API itself only lasts as long as the updates topic keeps messages, so the lasting record is wherever those log lines are shipped. Events written straight to the topic carry whatever their producer put in `requested_by`; producers are trusted.
 - **Kafka** has only run as one demo broker: no replication, failover or rebalancing across real brokers. Kafka traffic is plaintext with no credentials.
 - **Dead letters** are parked with their error; there is no tool to list or replay them.
 
 ## License
 
-This repository has **no LICENSE file yet**, so by default nobody else may use, copy or change it. The owner needs to choose one before another company takes the code.
+This project is licensed under the **GNU General Public License v3.0** ([LICENSE](../LICENSE)). Anyone may use, change and share it; anyone who distributes a changed version must publish it under the same license.
 
-What to know when choosing:
+Why GPL-3.0:
 
-- **cms-nbi-client is licensed GPL-3.0** (its LICENSE file, and "GPL v3.0" on PyPI). This project depended on it from commit 502a8e8 until 2d36823, which replaced it with this project's own client. No code from the library is in the repository: the client was written from requests the library sent to the mock server, which are kept as test data in `tests/fixtures/cms_nbi_client_requests.json`, and the docs credit the library throughout. Whether request formats learned that way, and that recording, carry any GPL obligation is a question for a lawyer, not settled here.
-- **The first commit (51afa5e) tracked a whole `venv/`**: about 60 third-party packages (paramiko under the LGPL, netmiko, cryptography and others), removed in 68a8e21 but still in git history. Anyone given the full history receives those copies. Either keep their licenses with the history or rewrite it before handing it over.
+- **cms-nbi-client is licensed GPL-3.0** (its LICENSE file, and "GPL v3.0" on PyPI). This project depended on it until it replaced it with its own client (`app/nbi/client.py`). No code from the library is in the repository: the client was written from the requests the library sent to the mock server, which are kept as test data in `tests/fixtures/cms_nbi_client_requests.json`, and the docs credit the library throughout. Whether request formats learned that way carry any GPL obligation was never settled; publishing under the same license means the question does not need to be.
+- **Third-party packages are not part of the repository.** An early commit tracked a whole `venv/` (about 60 packages: paramiko under the LGPL, netmiko, cryptography and others). It was removed from the entire history before the repository was published, so no copies of those packages are distributed with it. They are installed from PyPI under their own licenses (`requirements*.txt`).
 
 ## How it was written
 

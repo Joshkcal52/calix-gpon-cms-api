@@ -269,6 +269,9 @@ def plan_subscriber(record: ExportRecord, mapping: SmxMap) -> SubscriberPlan:
         }
         services.append(SmxRequest(action="Create/Update Data Service", parameters=parameters))
 
+    if record.coverage != "complete":
+        warnings.append(f"Coverage is '{record.coverage}': something on this ONT was not read from CMS (see the "
+                        f"export's notes), so this plan may not carry everything over. Check it by hand.")
     subscriber, ont = record.subscriber, record.ont
     disposition = "replaced" if ont.fill_in_replacement_serial_number else "kept"
     base = dict(account_number=account, legacy_network=legacy.network, legacy_ont_id=legacy.ont_id,

@@ -11,7 +11,10 @@ For every command exactly one of these happens:
                       command cannot block the ones behind it.
   failed for now      (CMS down, timeout, breaker open) do NOT acknowledge.
                       Wait, then take the same command again. Work queues up
-                      behind it until CMS is back.
+                      behind it until CMS is back. After max_attempts, a
+                      command that keeps failing on its own (a timeout, not an
+                      open breaker) is failed for good instead, so one sick ONT
+                      cannot hold up its network until the age limit.
   worker dies         nothing was acknowledged, so the bus hands the command
                       to another worker.
 
@@ -167,13 +170,15 @@ def command_age(command: Command, delivery: Delivery) -> float:
 class Worker:
     def __init__(self, bus: MessageBus, lanes: Sequence[str], handlers: Dict[str, Handler], *,
                  max_command_age: float = 3600.0, retry_backoff: float = 2.0,
-                 max_retry_backoff: float = 60.0, heartbeat_file: Optional[str] = None):
+                 max_retry_backoff: float = 60.0, heartbeat_file: Optional[str] = None,
+                 max_attempts: int = 20):
         self._bus = bus
         self.lanes = list(lanes)
         self._handlers = handlers
         self.max_command_age = max_command_age
         self.retry_backoff = retry_backoff
         self.max_retry_backoff = max_retry_backoff
+        self.max_attempts = max_attempts
         self._heartbeat_file = heartbeat_file
         self._stop = asyncio.Event()
 
@@ -239,6 +244,13 @@ class Worker:
             if error["code"] == "internal_error":
                 logger.exception(f"Command {command.id} ({command.action}) crashed")
 
+            # An open breaker says CMS (or that E7) is down for everyone: wait it out, up to the age
+            # limit. Anything else retryable that keeps failing is this command's own problem.
+            exhausted = delivery.attempt >= self.max_attempts and error.get("code") != "cms_unavailable"
+            if error.get("retryable") and exhausted:
+                error = {**error, "retryable": False, "attempts": delivery.attempt,
+                         "message": f"{error['message']} Gave up after {delivery.attempt} attempts; "
+                                    f"check the ONT before sending it again."}
             if error.get("retryable") and not expired:
                 delay = min(self.max_retry_backoff, self.retry_backoff * 2 ** (delivery.attempt - 1))
                 delay = max(delay, float(error.get("retry_after_seconds") or 0))

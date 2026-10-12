@@ -48,7 +48,7 @@ from app.models.provisioning_model import (
 from app.nbi import e7_parse as parse
 from app.nbi.e7_session import E7Node, E7Session
 from app.nbi.errors import (
-    NbiConflictError, NbiError, NbiNotFoundError, NbiNotVerifiedError, NbiRejectedError
+    NbiConflictError, NbiError, NbiNotFoundError, NbiNotVerifiedError, NbiParseError, NbiRejectedError
 )
 from app.nbi.router_side import MODE_NOT_SETTABLE
 from app.nbi.serno import from_serno, to_serno
@@ -431,8 +431,10 @@ class E7CliBackend:
             return None
         row = parse.merged(output)
         self._audit("show ont detail", [row])
-        if not parse.value(row, "serial-number") and parse.number(row, "ont") is None:
-            return None
+        if not parse.value(row, "serial-number"):
+            # Not "no such ONT" (the E7 says that, and it is handled above): output this backend cannot read.
+            # Read as absent, an activation would create the ONT again.
+            raise _unreadable(network, f"show ont {ont_id} detail", "no serial number", output)
         row.setdefault("ont", str(ont_id))
         return self._ont_state(row)
 
@@ -446,7 +448,9 @@ class E7CliBackend:
             return []
         rows = parse.table(output) if _is_table(output) else parse.records(output)
         ids = [parse.number(row, "ont") for row in self._audit(" ".join(command.split()[:3]), rows)]
-        return [i for i in dict.fromkeys(ids) if i is not None]
+        if None in ids:
+            raise _unreadable(network, command, "a row without an ONT number", output)
+        return list(dict.fromkeys(ids))
 
     async def _free_ont_id(self, network: str) -> int:
         used = {ont.ont_id for ont in await self.list_onts(network)}
@@ -469,7 +473,9 @@ class E7CliBackend:
         for row in self._audit("show ont-port eth-svc", rows):
             port, name = _port(parse.value(row, "port")), parse.value(row, "name")
             if port is None or not name:
-                continue
+                # Skipped, the service would vanish: an activation would add it again, a delete would miss it
+                raise _unreadable(network, f"show ont-port {ont_id} eth-svc", "a service row without a port or a name",
+                                  output)
             letter, number = port
             if name in self.service_names:
                 index = self.service_names.index(name) + 1
@@ -523,6 +529,12 @@ class E7CliBackend:
     def _audit(self, command: str, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
         self.unrecognised[command].update(parse.unrecognised(rows))
         return rows
+
+
+def _unreadable(network: str, command: str, what: str, output: str) -> NbiParseError:
+    text = " ".join(output.split())[:300]
+    return NbiParseError(f"E7 {network}: could not read the output of '{command}' ({what}): {text!r}. It is not read "
+                         f"as empty, so nothing is decided from it; fix the parser against python -m app.tools.e7_capture.")
 
 
 def _is_table(output: str) -> bool:

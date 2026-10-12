@@ -66,7 +66,7 @@ def test_an_unknown_bandwidth_profile_is_refused_before_anything_is_queued(api, 
         "subscriber_id": "SUB-4001", "serial_number": "CXNK00C4D303", "profile": "812G-1", "services": [service]}),
         422, "cms_rejected")
     assert "NOPE-BW" in signup["message"]
-    error_of(api.patch(f"{BASE}/onts/1/ports/eth1/services/1", json={"bandwidth_profile": "NOPE-BW"}),
+    error_of(api.patch(f"{BASE}/onts/1/ports/eth1/services/1?serial_number=CXNK00A3F101&expect_vlan=100", json={"bandwidth_profile": "NOPE-BW"}),
              422, "cms_rejected")
     assert api.get("/api/v2/jobs/").json() == []  # nothing was queued
     assert all(o.state.serial_number != "CXNK00C4D303" for o in backend._onts.values())
@@ -74,7 +74,7 @@ def test_an_unknown_bandwidth_profile_is_refused_before_anything_is_queued(api, 
 
     # BANDWIDTH_PROFILES replaces the simulated CMS's list: VOICE is no longer allowed
     monkeypatch.setattr(settings, "bandwidth_profiles", "RES-1G")
-    narrowed = error_of(api.patch(f"{BASE}/onts/1/ports/eth1/services/1", json={"bandwidth_profile": "VOICE"}),
+    narrowed = error_of(api.patch(f"{BASE}/onts/1/ports/eth1/services/1?serial_number=CXNK00A3F101&expect_vlan=100", json={"bandwidth_profile": "VOICE"}),
                         422, "cms_rejected")
     assert "Allowed (BANDWIDTH_PROFILES): RES-1G." in narrowed["message"]
 
@@ -91,7 +91,7 @@ def test_without_the_list_cms_refuses_it_mid_job_and_the_new_ont_is_rolled_back(
     assert "Bandwidth profile 'NOPE-BW' does not exist" in job["error"]["message"]
     assert all(o.state.serial_number != "CXNK00C4D303" for o in backend._onts.values())
 
-    changed = finish(api, api.patch(f"{BASE}/onts/1/ports/eth1/services/1", json={"bandwidth_profile": "NOPE-BW"}))
+    changed = finish(api, api.patch(f"{BASE}/onts/1/ports/eth1/services/1?serial_number=CXNK00A3F101&expect_vlan=100", json={"bandwidth_profile": "NOPE-BW"}))
     assert changed["status"] == "failed" and "NOPE-BW" in changed["error"]["message"]
     assert api.get(f"{BASE}/onts/1").json()["services"][0]["bandwidth_profile"] == "RES-1G"
 
@@ -155,7 +155,7 @@ def test_snapshot_compare_takes_the_snapshot_as_exported_as_json_or_as_an_export
     assert as_export.json()["onts_compared"] == as_yaml.json()["onts_compared"] == 14
 
     # A change made since is found whichever way the snapshot came in
-    finish(api, api.patch(f"{BASE}/onts/1/ports/eth1/services/1", json={"vlan": 300}))
+    finish(api, api.patch(f"{BASE}/onts/1/ports/eth1/services/1?serial_number=CXNK00A3F101&expect_vlan=100", json={"vlan": 300}))
     for response in (api.post(url, content=snapshot_yaml.encode(), headers={"content-type": "text/yaml"}),
                      api.post(url, json=export)):
         changes = response.json()["onts_changed"][0]["services_changed"][0]["changes"]
