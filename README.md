@@ -233,6 +233,14 @@ config.py       settings
 - [docs/KNOWN_UNKNOWNS.md](docs/KNOWN_UNKNOWNS.md): every open risk, guess and gap in one place, who owns the CMS work, the license question, and how the code was written
 - [deploy/demo/README.md](deploy/demo/README.md): the multi-process demo
 
+## License
+
+GPL-3.0: see [LICENSE](LICENSE). Why that license, and what it covers, is in [docs/KNOWN_UNKNOWNS.md](docs/KNOWN_UNKNOWNS.md#license).
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a public issue for one.
+
 ## Credits
 
 The shapes of the CMS requests were learned from [cms-nbi-client](https://github.com/somenetworking/CMS-NBI-Client) by somenetworking, which this project used before it had its own client (`app/nbi/client.py`). Thank you.

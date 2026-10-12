@@ -77,12 +77,12 @@ SMx parameter names come from the IDI billing SMx R24.x docs, not from SMx. Ever
 
 ## License
 
-This repository has **no LICENSE file yet**, so by default nobody else may use, copy or change it. The owner needs to choose one before another company takes the code.
+This project is licensed under the **GNU General Public License v3.0** ([LICENSE](../LICENSE)). Anyone may use, change and share it; anyone who distributes a changed version must publish it under the same license.
 
-What to know when choosing:
+Why GPL-3.0:
 
-- **cms-nbi-client is licensed GPL-3.0** (its LICENSE file, and "GPL v3.0" on PyPI). This project depended on it from commit 502a8e8 until 2d36823, which replaced it with this project's own client. No code from the library is in the repository: the client was written from requests the library sent to the mock server, which are kept as test data in `tests/fixtures/cms_nbi_client_requests.json`, and the docs credit the library throughout. Whether request formats learned that way, and that recording, carry any GPL obligation is a question for a lawyer, not settled here.
-- **The first commit (51afa5e) tracked a whole `venv/`**: about 60 third-party packages (paramiko under the LGPL, netmiko, cryptography and others), removed in 68a8e21 but still in git history. Anyone given the full history receives those copies. Either keep their licenses with the history or rewrite it before handing it over.
+- **cms-nbi-client is licensed GPL-3.0** (its LICENSE file, and "GPL v3.0" on PyPI). This project depended on it until it replaced it with its own client (`app/nbi/client.py`). No code from the library is in the repository: the client was written from the requests the library sent to the mock server, which are kept as test data in `tests/fixtures/cms_nbi_client_requests.json`, and the docs credit the library throughout. Whether request formats learned that way carry any GPL obligation was never settled; publishing under the same license means the question does not need to be.
+- **Third-party packages are not part of the repository.** An early commit tracked a whole `venv/` (about 60 packages: paramiko under the LGPL, netmiko, cryptography and others). It was removed from the entire history before the repository was published, so no copies of those packages are distributed with it. They are installed from PyPI under their own licenses (`requirements*.txt`).
 
 ## How it was written
 
