@@ -19,7 +19,7 @@ curl -s -X POST $A/signups -H 'content-type: application/json' -d '{"subscriber_
   "serial_number": "CXNK00C4D301", "profile": "844G-1", "ports": [{"port": 1, "security_profile": "2", "mode": "router"}],
   "services": [{"vlan": 100, "bandwidth_profile": "RES-1G", "tag_action": "1", "attach_to": "router"}]}'
 curl -s $A/onts/15/ports                                       # ports, modes, router side, read back
-curl -s -X POST $A/onts/15/ports/rg1/services/1/disable        # a lifecycle change (another job)
+curl -s -X POST "$A/onts/15/ports/rg1/services/1/disable?serial_number=CXNK00C4D301&expect_vlan=100"  # another job
 curl -s "$A/export?pon=1/1/1&format=csv" > pon.csv            # the cutover spreadsheet, fill_in_ columns blank
 curl -s $A/subscribers/SUB-1003/smx-plan                       # SMx requests for one subscriber (dry run)
 ```

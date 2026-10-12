@@ -9,14 +9,15 @@ import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.auth import WriteLimiter, parse_entries
 from app.controller.lifecycle_controller import apply_ont_change
 from app.controller.provisioning_controller import activate_ont
 from app.legacy.export import COVERAGE_COMPLETE, COVERAGE_INCOMPLETE, export_ont
 from app.models.job_model import JobStatus
-from app.models.lifecycle_model import DeleteOnt, UpdateService
-from app.models.provisioning_model import ActivationRequest, Attachment, EthernetService, ServiceChange
+from app.models.lifecycle_model import DeleteOnt, DeleteService, UpdatePort, UpdateService
+from app.models.provisioning_model import ActivationRequest, Attachment, EthernetService, PortChange, ServiceChange
 from app.nbi import cms_backend
 from app.nbi.breaker import CLOSED, OPEN, CircuitBreaker
 from app.nbi.e7_backend import E7CliBackend
@@ -68,14 +69,29 @@ def change(gw, ont_id, the_change):
 def test_a_change_for_an_ont_id_that_now_holds_another_serial_is_refused():
     gw, _ = gateway()
     with pytest.raises(NbiConflictError, match="not CXNK00A3F105"):
-        change(gw, 4, UpdateService(port="eth1", service_index=1, serial_number="CXNK00A3F105",
+        change(gw, 4, UpdateService(port="eth1", service_index=1, serial_number="CXNK00A3F105", expect_vlan=100,
                                     change=ServiceChange(admin_state="disabled")))
+
+
+def test_every_change_must_say_which_ont_and_which_service_it_means():
+    with pytest.raises(ValidationError, match="serial_number"):
+        UpdatePort(port="eth1", change=PortChange(admin_state="disabled"))
+    with pytest.raises(ValidationError, match="expect_vlan"):
+        UpdateService(port="eth1", service_index=1, serial_number="CXNK00A3F104",
+                      change=ServiceChange(admin_state="disabled"))
+    with pytest.raises(ValidationError, match="expect_vlan"):
+        DeleteService(port="eth1", service_index=1, serial_number="CXNK00A3F104")
+    assert DeleteService(port="eth1", service_index=1, serial_number="CXNK00A3F104",
+                         expect_vlan="none").expect_vlan == "none"
 
 
 def test_a_change_for_a_service_number_that_now_holds_another_vlan_is_refused():
     gw, _ = gateway()
     with pytest.raises(NbiConflictError, match="not VLAN 200"):
-        change(gw, 4, UpdateService(port="eth1", service_index=1, expect_vlan=200,
+        change(gw, 4, UpdateService(port="eth1", service_index=1, serial_number="CXNK00A3F104", expect_vlan=200,
+                                    change=ServiceChange(admin_state="disabled")))
+    with pytest.raises(NbiConflictError, match="not no outer VLAN"):
+        change(gw, 4, UpdateService(port="eth1", service_index=1, serial_number="CXNK00A3F104", expect_vlan="none",
                                     change=ServiceChange(admin_state="disabled")))
     done = change(gw, 4, UpdateService(port="eth1", service_index=1, expect_vlan=100, serial_number="CXNK00A3F104",
                                        change=ServiceChange(admin_state="disabled")))
@@ -102,7 +118,8 @@ def test_a_change_that_cms_accepts_but_does_not_hold_fails_the_job():
 
     backend.update_service = ignored
     with pytest.raises(NbiVerifyError, match="admin_state"):
-        change(gw, 4, UpdateService(port="eth1", service_index=1, change=ServiceChange(admin_state="disabled")))
+        change(gw, 4, UpdateService(port="eth1", service_index=1, serial_number="CXNK00A3F104", expect_vlan=100,
+                                    change=ServiceChange(admin_state="disabled")))
 
 
 def test_an_activation_whose_service_does_not_read_back_is_not_reported_as_success():
@@ -235,9 +252,10 @@ def test_scopes_limit_what_a_key_may_do(scoped):
     assert scoped.get(f"{BASE}/vlans", headers={"X-API-Key": READER}).status_code == 200
     assert scoped.post(f"{BASE}/onts/status-check", json={"ont_ids": [4]},
                        headers={"X-API-Key": READER}).status_code == 200
-    refused = scoped.post(f"{BASE}/onts/4/ports/eth1/disable", headers={"X-API-Key": READER})
+    refused = scoped.post(f"{BASE}/onts/4/ports/eth1/disable?serial_number=CXNK00A3F104",
+                          headers={"X-API-Key": READER})
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "forbidden"
-    assert scoped.post(f"{BASE}/onts/4/ports/eth1/disable?dry_run=true",
+    assert scoped.post(f"{BASE}/onts/4/ports/eth1/disable?serial_number=CXNK00A3F104&dry_run=true",
                        headers={"X-API-Key": CHANGER}).status_code == 202
     assert scoped.delete(delete, headers={"X-API-Key": CHANGER}).status_code == 403
     assert scoped.delete(delete, headers={"X-API-Key": ADMIN}).status_code == 202  # no scopes listed: everything
@@ -255,7 +273,7 @@ def test_a_key_over_its_delete_limit_is_refused_and_nothing_is_queued(scoped, mo
     delete = f"{BASE}/onts/4?serial_number=CXNK00A3F104&dry_run=true"
     assert [scoped.delete(delete, headers={"X-API-Key": ADMIN}).status_code for _ in range(3)] == [202, 202, 429]
     assert scoped.get(f"{BASE}/vlans", headers={"X-API-Key": ADMIN}).status_code == 200  # reads are not limited
-    assert scoped.post(f"{BASE}/onts/4/ports/eth1/disable?dry_run=true",
+    assert scoped.post(f"{BASE}/onts/4/ports/eth1/disable?serial_number=CXNK00A3F104&dry_run=true",
                        headers={"X-API-Key": ADMIN}).status_code == 202
 
 

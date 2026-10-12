@@ -36,6 +36,7 @@ from tests.test_cms_client import RECORDED, canonical, wire  # noqa: F401 (wire 
 NET = MOCK_NETWORK
 BASE = f"/api/v2/networks/{NET}"
 SERIAL = "CXNK00C4D301"
+SERVICE = {"serial_number": SERIAL, "expect_vlan": 100}  # the service each signup here binds, eth1 VLAN 100
 GOOD = ("none", "100m", "1g", "1m", "9999m")
 BAD = ("100", "100M", "1G", "1t", "100k", "0m", "10000m", "fast", "", " 100m", "100 m")
 
@@ -91,7 +92,8 @@ def test_bad_rates_are_refused_before_anything_is_queued(api):
     for value in ("100", "1G", "fast"):
         service = {"vlan": 100, "bandwidth_profile": "RES-1G", "tag_action": "1", "us_pir_override": value}
         assert api.post(f"{BASE}/signups", json={**body, "services": [service]}).status_code == 422
-        assert api.patch(f"{BASE}/onts/3/ports/eth1/services/1", json={"ds_pir_override": value}).status_code == 422
+        assert api.patch(f"{BASE}/onts/3/ports/eth1/services/1", params=SERVICE,
+                         json={"ds_pir_override": value}).status_code == 422
     assert api.get("/api/v2/jobs/").json() == []
 
 
@@ -109,10 +111,10 @@ def test_rates_are_set_on_signup_read_back_and_changed_repeat_safely(api):
     assert rates(api, plain["result"]["ont_id"]) == [("none", "none")]
 
     url = f"{BASE}/onts/{ont_id}/ports/eth1/services/1"
-    changed = finish(api, api.patch(url, json={"us_pir_override": "50m", "ds_pir_override": "1g"}))
+    changed = finish(api, api.patch(url, params=SERVICE, json={"us_pir_override": "50m", "ds_pir_override": "1g"}))
     assert changed["result"]["applied"] == {"us_pir_override": "50m"}  # downstream already 1g
-    assert finish(api, api.patch(url, json={"us_pir_override": "50m"}))["result"]["changed"] is False
-    assert finish(api, api.patch(url, json={"ds_pir_override": "none"}))["result"]["changed"] is True
+    assert finish(api, api.patch(url, params=SERVICE, json={"us_pir_override": "50m"}))["result"]["changed"] is False
+    assert finish(api, api.patch(url, params=SERVICE, json={"ds_pir_override": "none"}))["result"]["changed"] is True
     assert rates(api, ont_id) == [("50m", "none")]
 
 
@@ -143,7 +145,8 @@ def test_export_snapshot_and_smx_plan_carry_the_rates_and_never_guess_them(api):
     # The snapshot holds them, a change shows up, and a snapshot without them compares as before
     snapshot = snapshot_from_export(export)
     assert next(o for o in snapshot["onts"] if o["ont_id"] == ont_id)["services"][0]["us_pir_override"] == "100m"
-    finish(api, api.patch(f"{BASE}/onts/{ont_id}/ports/eth1/services/1", json={"us_pir_override": "200m"}))
+    finish(api, api.patch(f"{BASE}/onts/{ont_id}/ports/eth1/services/1", params=SERVICE,
+                          json={"us_pir_override": "200m"}))
     now = snapshot_from_export(CutoverExport.model_validate(api.get(f"{BASE}/export", params={"pon": "1/1/1"}).json()))
     changes = [c for o in compare(snapshot, now).onts_changed for s in o.services_changed for c in s.changes]
     assert [(c.field, c.saved, c.now) for c in changes] == [("us_pir_override", "100m", "200m")]
@@ -228,7 +231,8 @@ def test_rate_changes_over_soap_are_repeat_safe_and_exported(nbi_server):
     async def scenario():
         gateway = NbiGateway(CmsBackend("127.0.0.1", port, "nbi-demo", "demo-password", timeout=3.0,
                                         router=MOCK_RG_ADDRESSING), timeout=5)
-        change = UpdateService(port="eth1", service_index=1, change=ServiceChange(us_pir_override="100m"))
+        change = UpdateService(port="eth1", service_index=1, serial_number="CXNK00A3F103", expect_vlan=100,
+                               change=ServiceChange(us_pir_override="100m"))
         first = await apply_ont_change(Recorder(), gateway, NET, 3, change)
         again = await apply_ont_change(Recorder(), gateway, NET, 3, change)
         record = await export_ont(gateway, NET, 3)

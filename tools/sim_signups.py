@@ -363,10 +363,11 @@ def lifecycle_round(sim: Sim, customers: List[Dict[str, Any]], records: List[Dic
 
     # Disable then enable a port
     customer, ont_id = ok[0]
-    run(f"disable eth1 on ONT {ont_id}", "POST", f"/onts/{ont_id}/ports/eth1/disable")
+    serial = customer["serial_number"]
+    run(f"disable eth1 on ONT {ont_id}", "POST", f"/onts/{ont_id}/ports/eth1/disable?serial_number={serial}")
     sim.check(eth1_state(ont_id) == "disabled", f"ONT {ont_id} eth1 reads {eth1_state(ont_id)} after disable")
     steps[-1]["verified"] = eth1_state(ont_id) == "disabled"
-    run(f"enable eth1 on ONT {ont_id}", "POST", f"/onts/{ont_id}/ports/eth1/enable")
+    run(f"enable eth1 on ONT {ont_id}", "POST", f"/onts/{ont_id}/ports/eth1/enable?serial_number={serial}")
     steps[-1]["verified"] = eth1_state(ont_id) == "enabled"
     sim.check(steps[-1]["verified"], f"ONT {ont_id} eth1 does not read enabled after enable")
 
@@ -376,7 +377,8 @@ def lifecycle_round(sim: Sim, customers: List[Dict[str, Any]], records: List[Dic
         hsi = next(s for s in sim.get(f"/onts/{ont_id}").json()["services"] if s["vlan"] == 100)
         port = f"{'rg' if hsi['attachment'] == 'router' else 'eth'}{hsi['ont_port']}"
         run(f"HSI on ONT {ont_id} {port} RES-1G -> RES-500M", "PATCH",
-            f"/onts/{ont_id}/ports/{port}/services/{hsi['service_index']}", {"bandwidth_profile": "RES-500M"})
+            f"/onts/{ont_id}/ports/{port}/services/{hsi['service_index']}"
+            f"?serial_number={customer['serial_number']}&expect_vlan=100", {"bandwidth_profile": "RES-500M"})
         after = sim.get(f"/onts/{ont_id}").json()["services"]
         now = [s for s in after if s["vlan"] == 100]
         steps[-1]["verified"] = len(now) == 1 and now[0]["bandwidth_profile"] == "RES-500M" and len(after) == len(

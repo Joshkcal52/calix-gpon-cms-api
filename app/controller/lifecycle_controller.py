@@ -7,9 +7,10 @@ command delivered twice (worker crash, timeout after CMS applied it) finishes
 cleanly the second time instead of failing or doing it again. Each change is
 a single CMS write, so there is nothing to undo if it fails.
 
-CMS's GUI and the E7's CLI change the same ONTs, so nothing here trusts a read
-for longer than it must: a change can say which ONT (serial_number) and which
-service (expect_vlan) it means, an ONT delete checks each service again just
+CMS's GUI and the E7's CLI change the same ONTs, and ONT IDs and service
+numbers are reused, so nothing here trusts a read for longer than it must:
+every change says which ONT it means (serial_number) and every service change
+which service (expect_vlan, or "none" for a service without an outer VLAN), an ONT delete checks each service again just
 before deleting it, and every write is read back. A write CMS accepted but
 does not show fails the job (not_applied) rather than reporting success.
 """
@@ -54,8 +55,7 @@ async def _update_port(context: JobContext, gateway: NbiGateway, network: str, o
         raise NbiRejectedError("Only the admin state of a router port can be changed.")
 
     await context.step(1, 2, f"Reading port {change.port} of ONT {ont_id}")
-    if change.serial_number is not None:
-        _check_serial(await gateway.get_ont(network, ont_id), change.serial_number, "changed")
+    _check_serial(await gateway.get_ont(network, ont_id), change.serial_number, "changed")
     current = await _read_port(gateway, network, ont_id, attachment, number)
 
     differences = port_differences(current, wanted)
@@ -94,18 +94,18 @@ async def _update_service(context: JobContext, gateway: NbiGateway, network: str
 
     await context.step(1, 2, f"Reading {label}")
     ont = await gateway.get_ont(network, ont_id)
-    if change.serial_number is not None:
-        _check_serial(ont, change.serial_number, "changed")
+    _check_serial(ont, change.serial_number, "changed")
     service = ont.service_at(attachment, number, change.service_index)
     if service is None:
         raise NbiNotFoundError(f"There is no {label} on {network}.")
-    _check_vlan(service, change.expect_vlan, label, "changed")
-
     wanted = change.change.model_dump(exclude_none=True)
     differences = _service_differences(service, wanted)
     if not differences:
+        # Nothing to send. Checked before the VLAN, so a repeat of a VLAN change, which no longer finds the
+        # old VLAN, finishes cleanly
         await context.step(2, 2, f"The {label} already matches; nothing sent")
         return {"port": change.port, "service_index": change.service_index, "changed": False, "applied": {}}
+    _check_vlan(service, change.expect_vlan, label, "changed")
     if change.dry_run:
         await context.step(2, 2, f"Dry run: would change {label}: {_describe(differences)}")
         return {"port": change.port, "service_index": change.service_index, "changed": False,
@@ -132,8 +132,7 @@ async def _delete_service(context: JobContext, gateway: NbiGateway, network: str
 
     await context.step(1, 2, f"Reading {label}")
     ont = await gateway.get_ont(network, ont_id)
-    if change.serial_number is not None:
-        _check_serial(ont, change.serial_number, "deleted")
+    _check_serial(ont, change.serial_number, "deleted")
     service = ont.service_at(attachment, number, change.service_index)
     result = {"port": change.port, "service_index": change.service_index}
     if service is None:
@@ -243,10 +242,11 @@ def _check_serial(ont: OntState, expected: str, verb: str) -> None:
                                f"Nothing was {verb}.")
 
 
-def _check_vlan(service: ProvisionedService, expected: Optional[int], label: str, verb: str) -> None:
-    """Service numbers are reused: refuse if this number now holds a service on another VLAN"""
-    if expected is not None and service.vlan != expected:
-        raise NbiConflictError(f"The {label} is on {_vlan_text(service.vlan)}, not VLAN {expected}. "
+def _check_vlan(service: ProvisionedService, expected: "int | str", label: str, verb: str) -> None:
+    """Service numbers are reused: refuse if this number now holds a service on another VLAN. "none": no outer VLAN."""
+    wanted = None if expected == "none" else expected
+    if service.vlan != wanted:
+        raise NbiConflictError(f"The {label} is on {_vlan_text(service.vlan)}, not {_vlan_text(wanted)}. "
                                f"Not {verb}.")
 
 

@@ -122,6 +122,12 @@ def test_port_and_service_settings_are_validated_before_anything_is_queued(api):
     assert api.patch(f"{BASE}/onts/3/ports/eth1", json={}).status_code == 422
     assert api.patch(f"{BASE}/onts/3/ports/eth1/services/1", json={"speed": 9}).status_code == 422
     assert api.delete(f"{BASE}/onts/3").status_code == 422  # serial number is required
+    # Every change says which ONT it means, and a service change which service: IDs and numbers are reused
+    assert api.post(f"{BASE}/onts/3/ports/eth2/disable").status_code == 422
+    service = f"{BASE}/onts/3/ports/eth1/services/1"
+    assert api.post(f"{service}/disable", params={"serial_number": "CXNK00A3F103"}).status_code == 422
+    assert api.delete(service, params={"serial_number": "CXNK00A3F103"}).status_code == 422
+    assert api.delete(service, params={"serial_number": "CXNK00A3F103", "expect_vlan": "any"}).status_code == 422
     assert api.get("/api/v2/jobs/").json() == []
 
 
@@ -135,59 +141,75 @@ def test_lookups(api):
 
 def test_service_lifecycle_is_repeat_safe(api):
     url = f"{BASE}/onts/3/ports/eth1/services/1"
+    on_100 = {"serial_number": "CXNK00A3F103", "expect_vlan": 100}
+    on_300 = {**on_100, "expect_vlan": 300}
 
-    first = finish(api, api.post(f"{url}/disable"))
+    first = finish(api, api.post(f"{url}/disable", params=on_100))
     assert first["status"] == "succeeded" and first["result"]["changed"] is True
-    again = finish(api, api.post(f"{url}/disable"))
+    again = finish(api, api.post(f"{url}/disable", params=on_100))
     assert again["status"] == "succeeded" and again["result"]["changed"] is False
     assert api.get(f"{BASE}/onts/3").json()["services"][0]["admin_state"] == "disabled"
-    assert finish(api, api.post(f"{url}/enable"))["result"]["applied"] == {"admin_state": "enabled"}
+    assert finish(api, api.post(f"{url}/enable", params=on_100))["result"]["applied"] == {"admin_state": "enabled"}
 
-    changed = finish(api, api.patch(url, json={"bandwidth_profile": "VOICE", "vlan": 300, "tag_action": "1"}))
+    changed = finish(api, api.patch(url, params=on_100, json={"bandwidth_profile": "VOICE", "vlan": 300,
+                                                              "tag_action": "1"}))
     assert changed["result"]["applied"] == {"bandwidth_profile": "VOICE", "vlan": 300}  # tag action already 1
     service = api.get(f"{BASE}/onts/3").json()["services"][0]
     assert (service["bandwidth_profile"], service["vlan"]) == ("VOICE", 300)
+    # Repeated, the VLAN change no longer finds VLAN 100 but has nothing left to send: it finishes cleanly
+    repeated = finish(api, api.patch(url, params=on_100, json={"bandwidth_profile": "VOICE", "vlan": 300}))
+    assert repeated["status"] == "succeeded" and repeated["result"]["changed"] is False
+    # A change that would be sent to a service no longer on the VLAN the caller saw is refused
+    stale = finish(api, api.post(f"{url}/disable", params=on_100))
+    assert stale["error"]["code"] == "conflict" and "not VLAN 100" in stale["error"]["message"]
+    wrong_ont = finish(api, api.post(f"{url}/disable", params={**on_300, "serial_number": "CXNK00A3F104"}))
+    assert wrong_ont["error"]["code"] == "conflict" and "not CXNK00A3F104" in wrong_ont["error"]["message"]
 
-    bad_vlan = finish(api, api.patch(url, json={"vlan": 999}))
+    bad_vlan = finish(api, api.patch(url, params=on_300, json={"vlan": 999}))
     assert bad_vlan["error"]["code"] == "cms_rejected" and "VLAN 999" in bad_vlan["error"]["message"]
-    missing = finish(api, api.post(f"{BASE}/onts/3/ports/eth4/services/7/disable"))
+    missing = finish(api, api.post(f"{BASE}/onts/3/ports/eth4/services/7/disable", params=on_100))
     assert missing["error"]["code"] == "not_found"
 
-    wrong_vlan = finish(api, api.delete(url, params={"expect_vlan": 100}))
+    wrong_vlan = finish(api, api.delete(url, params=on_100))
     assert wrong_vlan["error"]["code"] == "conflict"
-    deleted = finish(api, api.delete(url, params={"expect_vlan": 300}))
+    deleted = finish(api, api.delete(url, params=on_300))
     assert deleted["result"]["deleted"] is True
-    gone = finish(api, api.delete(url))
+    gone = finish(api, api.delete(url, params=on_300))
     assert gone["status"] == "succeeded" and gone["result"]["already_absent"] is True
     assert [s["ont_port"] for s in api.get(f"{BASE}/onts/3").json()["services"]] == [2]
 
 
 def test_port_lifecycle_including_the_router_port(api):
-    disabled = finish(api, api.post(f"{BASE}/onts/3/ports/eth2/disable"))
+    ont1, ont3 = {"serial_number": "CXNK00A3F101"}, {"serial_number": "CXNK00A3F103"}
+    disabled = finish(api, api.post(f"{BASE}/onts/3/ports/eth2/disable", params=ont3))
     assert disabled["status"] == "succeeded" and disabled["kind"] == "port-change"
-    assert finish(api, api.post(f"{BASE}/onts/3/ports/eth2/disable"))["result"]["changed"] is False
-    patched = finish(api, api.patch(f"{BASE}/onts/3/ports/eth2",
+    again = finish(api, api.post(f"{BASE}/onts/3/ports/eth2/disable", params=ont3))
+    assert again["result"]["changed"] is False
+    patched = finish(api, api.patch(f"{BASE}/onts/3/ports/eth2", params=ont3,
                                     json={"subscriber_id": "SUB-1003", "security_profile": "2"}))
     assert patched["result"]["applied"] == {"subscriber_id": "SUB-1003", "security_profile": "2"}
 
-    assert finish(api, api.post(f"{BASE}/onts/3/ports/rg1/disable"))["status"] == "succeeded"
+    router = finish(api, api.post(f"{BASE}/onts/3/ports/rg1/disable", params=ont3))
+    assert router["status"] == "succeeded"
     ports = api.get(f"{BASE}/onts/3/ports").json()
     eth2 = next(p for p in ports["ethernet"] if p["port"] == "eth2")
     assert (eth2["admin_state"], eth2["subscriber_id"], eth2["security_profile"]) == ("disabled", "SUB-1003", "2")
     assert ports["router"]["ports"][0]["admin_state"] == "disabled"
 
     # The simulated CMS can also switch a port between bridge and router mode
-    assert finish(api, api.patch(f"{BASE}/onts/3/ports/eth1", json={"mode": "router"}))["status"] == "succeeded"
+    moded = finish(api, api.patch(f"{BASE}/onts/3/ports/eth1", params=ont3, json={"mode": "router"}))
+    assert moded["status"] == "succeeded"
     assert api.get(f"{BASE}/onts/3/ports").json()["ethernet"][0]["mode"] == "router"
-    bridged = finish(api, api.patch(f"{BASE}/onts/1/ports/eth1", json={"mode": "router"}))
+    bridged = finish(api, api.patch(f"{BASE}/onts/1/ports/eth1", params=ont1, json={"mode": "router"}))
     assert "cannot be in router mode" in bridged["error"]["message"]
 
     # ONT 1 is a 716GE-I: no router, and only two Ethernet ports in the simulation
-    no_router = finish(api, api.post(f"{BASE}/onts/1/ports/rg1/disable"))
+    no_router = finish(api, api.post(f"{BASE}/onts/1/ports/rg1/disable", params=ont1))
     assert no_router["error"]["code"] == "cms_rejected" and "has no router" in no_router["error"]["message"]
-    no_port = finish(api, api.post(f"{BASE}/onts/1/ports/eth4/disable"))
+    no_port = finish(api, api.post(f"{BASE}/onts/1/ports/eth4/disable", params=ont1))
     assert no_port["error"]["code"] == "not_found"
-    router_subscriber = finish(api, api.patch(f"{BASE}/onts/3/ports/rg1", json={"subscriber_id": "X"}))
+    router_subscriber = finish(api, api.patch(f"{BASE}/onts/3/ports/rg1", params=ont3,
+                                              json={"subscriber_id": "X"}))
     assert "Only the admin state" in router_subscriber["error"]["message"]
 
 
@@ -369,16 +391,21 @@ def test_lifecycle_changes_through_the_real_client_are_repeat_safe(cms):
         async def apply(change, ont_id=3):
             return await apply_ont_change(Recorder(), gateway, NET, ont_id, change)
 
-        first = await apply(UpdatePort(port="eth1", change=PortChange(admin_state="disabled", security_profile="5")))
-        again = await apply(UpdatePort(port="eth1", change=PortChange(admin_state="disabled", security_profile="5")))
+        port = UpdatePort(port="eth1", serial_number="CXNK00A3F103",
+                          change=PortChange(admin_state="disabled", security_profile="5"))
+        first = await apply(port)
+        again = await apply(port)
         assert (first["changed"], again["changed"]) == (True, False)
 
-        first = await apply(UpdateService(port="eth2", service_index=1, change=ServiceChange(admin_state="disabled")))
-        again = await apply(UpdateService(port="eth2", service_index=1, change=ServiceChange(admin_state="disabled")))
+        service = UpdateService(port="eth2", service_index=1, serial_number="CXNK00A3F103", expect_vlan=200,
+                                change=ServiceChange(admin_state="disabled"))
+        first = await apply(service)
+        again = await apply(service)
         assert (first["changed"], again["changed"]) == (True, False)
 
-        assert (await apply(DeleteService(port="eth2", service_index=1)))["deleted"] is True
-        assert (await apply(DeleteService(port="eth2", service_index=1)))["already_absent"] is True
+        delete = DeleteService(port="eth2", service_index=1, serial_number="CXNK00A3F103", expect_vlan=200)
+        assert (await apply(delete))["deleted"] is True
+        assert (await apply(delete))["already_absent"] is True
 
         with pytest.raises(NbiConflictError, match="1 service"):
             await apply(DeleteOnt(serial_number="CXNK00A3F103"))

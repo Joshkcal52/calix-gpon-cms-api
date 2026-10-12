@@ -43,7 +43,7 @@ curl -N -H "$KEY" $API/api/v2/jobs/<job id>/events
 
 # 4. Read the ports back; disable and re-enable a service
 curl -H "$KEY" $API/api/v2/networks/$NET/onts/15/ports
-curl -H "$KEY" -X POST $API/api/v2/networks/$NET/onts/15/ports/rg1/services/1/disable
+curl -H "$KEY" -X POST "$API/api/v2/networks/$NET/onts/15/ports/rg1/services/1/disable?serial_number=CXNK00C4D301&expect_vlan=100"
 
 # 5. Export PON 1/1/1 for a cutover, and plan the SMx requests (dry run, nothing is sent).
 #    Voice is not exported: the voice column reads "not checked" for every ONT that has voice ports.

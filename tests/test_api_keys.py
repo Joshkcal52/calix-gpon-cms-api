@@ -69,7 +69,7 @@ def test_the_old_ssh_and_cli_routes_are_gone(keyed):
 
 def test_a_queued_job_can_be_followed_with_the_key(keyed):
     headers = {"X-API-Key": PORTAL}
-    response = keyed.post(f"/api/v2/networks/{MOCK_NETWORK}/onts/3/ports/eth2/disable", headers=headers)
+    response = keyed.post(f"/api/v2/networks/{MOCK_NETWORK}/onts/3/ports/eth2/disable?serial_number=CXNK00A3F103", headers=headers)
     assert response.status_code == 202
     assert keyed.get(response.json()["events_url"]).status_code == 401
     stream = keyed.get(response.json()["events_url"], headers=headers).text

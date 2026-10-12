@@ -179,7 +179,8 @@ class LabCycle:
     async def toggle_port(self) -> None:
         port = f"eth{self.args.ont_port}"
         for state in ("disabled", "enabled"):
-            await self._change(UpdatePort(port=port, change=PortChange(admin_state=state)))
+            await self._change(UpdatePort(port=port, change=PortChange(admin_state=state),
+                                          serial_number=self.args.serial))
             now = next(p for p in (await self.gateway.get_ont_ports(self.network, self.ont_id)).ethernet
                        if p.number == self.args.ont_port)
             if now.admin_state != state:
@@ -188,7 +189,8 @@ class LabCycle:
     async def toggle_service(self) -> None:
         for state in ("disabled", "enabled"):
             await self._change(UpdateService(port=f"eth{self.args.ont_port}", service_index=1,
-                                             change=ServiceChange(admin_state=state)))
+                                             change=ServiceChange(admin_state=state),
+                                             serial_number=self.args.serial, expect_vlan=self.args.vlan))
             service = (await self.gateway.get_ont(self.network, self.ont_id)).services[0]
             if service.admin_state != state:
                 raise Failed(f"The service reads {service.admin_state!r} after setting it {state!r}.")
@@ -227,7 +229,8 @@ class LabCycle:
     async def delete(self) -> None:
         # The way the API deletes: the service on its own, then the ONT without CMS's force. This ONT was
         # created by this run, so there is no voice on it to check for.
-        await self._change(DeleteService(port=f"eth{self.args.ont_port}", service_index=1))
+        await self._change(DeleteService(port=f"eth{self.args.ont_port}", service_index=1,
+                                         serial_number=self.args.serial, expect_vlan=self.args.vlan))
         result = await self._change(DeleteOnt(serial_number=self.args.serial, voice_checked=True))
         if not result.get("deleted"):
             raise Failed(f"The delete reported {result}.")

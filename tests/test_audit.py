@@ -66,7 +66,7 @@ def test_each_change_records_the_api_key_that_asked_for_it(keyed, caplog):
     done = finish(keyed, activation, BILLING)
     assert (done["status"], done["requested_by"]) == ("succeeded", "billing")
 
-    change = keyed.post(f"{BASE}/onts/1/ports/eth1/disable", headers={"X-API-Key": NOC})
+    change = keyed.post(f"{BASE}/onts/1/ports/eth1/disable?serial_number=CXNK00A3F101", headers={"X-API-Key": NOC})
     assert finish(keyed, change, NOC)["requested_by"] == "noc"
     signup = keyed.post(f"{BASE}/signups", headers={"X-API-Key": BILLING}, json={
         "subscriber_id": "SUB-7001", "serial_number": "CXNK00C4D301", "profile": "844G-1",
@@ -98,7 +98,7 @@ def test_a_failed_change_is_audited_with_its_error(keyed, caplog):
 
 
 def test_mock_mode_without_keys_says_so_rather_than_naming_nobody(open_api):
-    response = open_api.post(f"{BASE}/onts/1/ports/eth1/disable")
+    response = open_api.post(f"{BASE}/onts/1/ports/eth1/disable?serial_number=CXNK00A3F101")
     assert finish(open_api, response)["requested_by"] == audit.ANONYMOUS
 
 

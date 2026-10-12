@@ -8,22 +8,26 @@ Every change is written so that running it twice gives the same result: the
 worker reads CMS first and sends only what is still different, then reads it
 back to check that CMS holds what was asked for.
 
-ONT IDs and service numbers are reused after a delete, so a change can carry
-what proves it is about the same thing: serial_number (the ONT) and
-expect_vlan (the service). A change whose target no longer matches is refused.
+ONT IDs and service numbers are reused after a delete, so every change carries
+what proves it is about the same thing: serial_number (the ONT) and, for a
+service, expect_vlan (its outer VLAN, or "none" for a service without one).
+A change whose target no longer matches is refused.
 dry_run runs every read and check and reports what would be sent, sending
 nothing.
 """
 
-from typing import Annotated, Literal, Optional, Union
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from app.models.provisioning_model import PortChange, PortName, SerialNumber, ServiceChange
 
-ExpectSerial = Field(None, description="Refuse unless the ONT still has this serial number (ONT IDs are reused)")
-ExpectVlan = Field(None, ge=1, le=4094, description="Refuse unless the service is on this VLAN (service numbers "
-                                                    "are reused)")
+ExpectSerial = Field(..., description="The ONT's serial number. Refused if the ONT ID now holds another ONT "
+                                     "(ONT IDs are reused)")
+# The service's outer VLAN, or "none" for a service without one
+ExpectedVlan = Union[Annotated[int, Field(ge=1, le=4094)], Literal["none"]]
+ExpectVlan = Field(..., description="The service's outer VLAN, or none if it has none. Refused if the service "
+                                    "number now holds another service (service numbers are reused)")
 DryRun = Field(False, description="Read and check everything, report what would be sent, send nothing")
 
 ACTION_CHANGE_ONT = "CHANGE_ONT"
@@ -36,7 +40,7 @@ class UpdatePort(BaseModel):
     op: Literal["update_port"] = "update_port"
     port: PortName
     change: PortChange
-    serial_number: Optional[SerialNumber] = ExpectSerial
+    serial_number: SerialNumber = ExpectSerial
     dry_run: bool = DryRun
 
 
@@ -48,8 +52,8 @@ class UpdateService(BaseModel):
     port: PortName
     service_index: int = Field(..., ge=1, le=12)
     change: ServiceChange
-    serial_number: Optional[SerialNumber] = ExpectSerial
-    expect_vlan: Optional[int] = ExpectVlan
+    serial_number: SerialNumber = ExpectSerial
+    expect_vlan: ExpectedVlan = ExpectVlan
     dry_run: bool = DryRun
 
 
@@ -59,8 +63,8 @@ class DeleteService(BaseModel):
     op: Literal["delete_service"] = "delete_service"
     port: PortName
     service_index: int = Field(..., ge=1, le=12)
-    expect_vlan: Optional[int] = ExpectVlan
-    serial_number: Optional[SerialNumber] = ExpectSerial
+    expect_vlan: ExpectedVlan = ExpectVlan
+    serial_number: SerialNumber = ExpectSerial
     dry_run: bool = DryRun
 
 

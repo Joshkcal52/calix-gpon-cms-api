@@ -14,7 +14,7 @@ Like the rest of the project, all of these have been tested against the mocks on
 | 1 | Assuming you are the only writer | fixed, with two read-then-pick IDs left |
 | 2 | A second source of truth | partly |
 | 3 | Treating an old request as current intent | partly |
-| 4 | Identifying things by position | fixed (opt-in on the API) |
+| 4 | Identifying things by position | fixed |
 | 5 | Cleanup more dangerous than the failure | partly |
 | 6 | Treating "timed out" as "failed" | handled |
 | 7 | Retries with no cap and no isolation | partly |
@@ -66,17 +66,20 @@ Reading CMS before every write keeps the main path honest. State kept on the sid
 
 **Guarded:**
 - **Age limit.** Every command has one, `COMMAND_MAX_AGE_SECONDS` (`config.py:128`), measured from the earlier of the producer's and the bus's timestamps (`app/worker/runner.py:160`).
-- **Expected-state guards (new).** Port and service changes and deletes can carry `serial_number` and `expect_vlan`, and are refused when the target no longer matches (`lifecycle_controller.py:239-250`).
+- **Expected-state guards (new).** Every port and service change and delete must carry `serial_number`, and every service change and delete `expect_vlan`. They are refused when the target no longer matches (`lifecycle_controller.py:238-251`).
 - **Dry runs (new).** `dry_run=true` lets a caller see what a delayed or replayed command would do first.
 
 **Still open:**
-- **The guards are optional**, so existing clients keep working. Billing and the portal should always send them; making them required is a breaking API change for the owner to decide.
 - **A replayed signup within the hour still reverts later changes.** The activation changes an already bound service to match the request (`provisioning_controller.py:155`).
 
-### 4. Identifying things by position: fixed (opt-in on the API)
+### 4. Identifying things by position: fixed
 
-- **ONT IDs.** Every lifecycle change now takes `serial_number` (`app/models/lifecycle_model.py:39, 51, 63`), checked the way the ONT delete always was (`lifecycle_controller.py:239`).
-- **Service numbers.** Service changes and deletes take `expect_vlan` (`lifecycle_model.py:52, 62`). The ONT delete re-checks each service's identity just before deleting it (#1).
+The guards were made required before any client was connected, so no caller ever depended on changes without them. A request that leaves one out gets `422` and nothing is queued.
+
+- **ONT IDs.** Every lifecycle change requires `serial_number` (`app/models/lifecycle_model.py:43, 55, 67`), checked the way the ONT delete always was (`lifecycle_controller.py:238`).
+- **Service numbers.** Service changes and deletes require `expect_vlan`: the service's outer VLAN, or `none` for a service without one (`lifecycle_model.py:28, 56, 66`; `lifecycle_controller.py:245`).
+  - **Repeats still succeed.** A service change with nothing left to send finishes before the VLAN check, so a repeated VLAN change still succeeds (`lifecycle_controller.py:101-108`).
+  - **ONT deletes re-check.** The ONT delete re-checks each service's identity just before deleting it (#1).
 - **The CMS reader no longer defaults a missing service number or port to 1.** That is now a parse error (`cms_backend.py:235-236`).
 - **On the E7 path the service number still comes from the name's place in `E7_SERVICE_NAMES`** (`e7_backend.py:483`). The setting's comment now says so (`config.py:97-101`), and `expect_vlan` catches a renumbering.
 
