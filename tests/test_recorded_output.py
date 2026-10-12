@@ -26,7 +26,7 @@ def recorded(path: Path):
 
 
 @pytest.mark.skipif(not RECORDINGS, reason="no E7 output recorded yet (see tests/fixtures/e7/README.md)")
-@pytest.mark.parametrize("path", RECORDINGS, ids=lambda p: f"{p.parent.name}/{p.name}")
+@pytest.mark.parametrize("path", RECORDINGS, ids=[f"{p.parent.name}/{p.name}" for p in RECORDINGS])
 def test_the_backend_reads_recorded_e7_output(path):
     command, output = recorded(path)
     backend = E7CliBackend([E7Node(name="E7", host="recorded")], sessions={"E7": object()})
